@@ -27,3 +27,7 @@ __pycache__/
 # Editor / planning cruft
 .claude/
 scripts/temp.py
+
+# Local data and scratch files that are never copied into the image
+*.csv
+*.R

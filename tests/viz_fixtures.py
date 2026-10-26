@@ -1,4 +1,4 @@
-"""A tiny greenpy output directory for the viz tests (British National Grid, central London)."""
+"""A tiny verdance output directory for the viz tests (British National Grid, central London)."""
 
 from pathlib import Path
 
@@ -6,14 +6,14 @@ import geopandas as gpd
 import pandas as pd
 import shapely
 
-from greenpy.config.schema import ColumnMapping, DataPaths, GreenPyConfig, OutputPaths
+from verdance.config.schema import ColumnMapping, DataPaths, VerdanceConfig, OutputPaths
 
 CRS = "EPSG:27700"
 X0, Y0 = 530000, 180000
 
 
-def make_config(base: Path, trees: Path | None = None, **columns) -> GreenPyConfig:
-    return GreenPyConfig(
+def make_config(base: Path, trees: Path | None = None, **columns) -> VerdanceConfig:
+    return VerdanceConfig(
         study_area_name="Testville",
         crs=CRS,
         data=DataPaths(

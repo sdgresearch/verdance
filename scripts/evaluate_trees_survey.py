@@ -24,8 +24,8 @@ from rasterio.windows import from_bounds
 from scipy import ndimage
 from scipy.spatial import cKDTree
 
-from greenpy.optional.tree_eval import match_points
-from greenpy.optional.tree_segmentation import _read_layers, ground_scale
+from verdance.optional.tree_eval import match_points
+from verdance.optional.tree_segmentation import _read_layers, ground_scale
 
 T3_AREA, T3_HEIGHT = 10.0, 3.0
 

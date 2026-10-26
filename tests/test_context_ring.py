@@ -5,15 +5,15 @@ import pandas as pd
 import pytest
 from shapely.geometry import box
 
-from greenpy.config.schema import ColumnMapping, DataPaths, GreenPyConfig, OutputPaths
-from greenpy.pipeline import all_buildings, context_ring, ensure_context_buildings
+from verdance.config.schema import ColumnMapping, DataPaths, VerdanceConfig, OutputPaths
+from verdance.pipeline import all_buildings, context_ring, ensure_context_buildings
 
 CRS = "EPSG:32618"
 
 
 def _cfg(tmp_path, buildings="overture", context_buffer=100.0):
     (tmp_path / "database").mkdir(exist_ok=True)
-    return GreenPyConfig(
+    return VerdanceConfig(
         study_area_name="t", crs=CRS, data=DataPaths(buildings, "p", "a", "r", "c"),
         columns=ColumnMapping(geo_levels=["unit"]), output=OutputPaths(str(tmp_path)), context_buffer=context_buffer,
     )
@@ -46,7 +46,7 @@ def test_context_buildings_fetched_once_and_merged(tmp_path, monkeypatch):
                                 geometry=[box(499995, 500500, 500005, 500510), box(499950, 500200, 499960, 500210)],
                                 crs=CRS)
 
-    monkeypatch.setattr("greenpy.overture.fetch_overture_buildings", fake_fetch)
+    monkeypatch.setattr("verdance.overture.fetch_overture_buildings", fake_fetch)
     cfg = _cfg(tmp_path)
     out = ensure_context_buildings(cfg)
     ctx = gpd.read_parquet(out)

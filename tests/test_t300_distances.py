@@ -8,8 +8,8 @@ import pandas as pd
 import pytest
 from shapely.geometry import LineString, Point, box
 
-from greenpy.pipeline import _derive_road_nodes
-from greenpy.t300 import (
+from verdance.pipeline import _derive_road_nodes
+from verdance.t300 import (
     get_closest_park,
     get_closest_park_manhattan,
     get_road_graph_distances,

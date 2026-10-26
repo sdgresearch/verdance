@@ -1,6 +1,6 @@
 import pytest
 
-from greenpy.dggs import RESOLUTION_RANGES, SYSTEM_NAMES, get_system
+from verdance.dggs import RESOLUTION_RANGES, SYSTEM_NAMES, get_system
 
 
 @pytest.mark.parametrize("name", SYSTEM_NAMES)

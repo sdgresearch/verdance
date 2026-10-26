@@ -11,21 +11,21 @@ import shapely
 from rasterio.transform import from_origin
 from shapely.geometry import LineString, Point, box
 
-from greenpy.config.schema import ColumnMapping, DataPaths, GreenPyConfig, OutputPaths
-from greenpy.optional.visibility.dsm import build_dsm, read_chm
-from greenpy.optional.visibility.inputs import VisibilityInputs
-from greenpy.optional.visibility.los import pair_min_eye_height
-from greenpy.optional.visibility.observers import facade_points, floor_eyes
-from greenpy.optional.visibility.pairs import eligible_pairs
-from greenpy.optional.visibility.params import VisibilityParams
-from greenpy.optional.visibility.raster_engine import visibility_for_buildings
-from greenpy.optional.visibility.targets import tree_targets
+from verdance.config.schema import ColumnMapping, DataPaths, VerdanceConfig, OutputPaths
+from verdance.optional.visibility.dsm import build_dsm, read_chm
+from verdance.optional.visibility.inputs import VisibilityInputs
+from verdance.optional.visibility.los import pair_min_eye_height
+from verdance.optional.visibility.observers import facade_points, floor_eyes
+from verdance.optional.visibility.pairs import eligible_pairs
+from verdance.optional.visibility.params import VisibilityParams
+from verdance.optional.visibility.raster_engine import visibility_for_buildings
+from verdance.optional.visibility.targets import tree_targets
 
 CRS = "EPSG:32632"
 
 
 def _cfg():
-    return GreenPyConfig(study_area_name="t", crs=CRS, data=DataPaths("b", "p", "a", "r", "c"),
+    return VerdanceConfig(study_area_name="t", crs=CRS, data=DataPaths("b", "p", "a", "r", "c"),
                          columns=ColumnMapping(geo_levels=["x"]), output=OutputPaths("/nonexistent"))
 
 
@@ -151,7 +151,7 @@ def test_raster_matches_exact_prisms_away_from_thresholds(seed):
 
 
 def test_crown_layers_separate_overlaps_not_touches():
-    from greenpy.optional.visibility.dsm import crown_layers
+    from verdance.optional.visibility.dsm import crown_layers
 
     crowns = np.array([box(0, 0, 2, 2), box(2, 0, 4, 2), box(1, 1, 3, 3), box(0, 0, 2, 2), box(10, 10, 11, 11)])
     layers = crown_layers(crowns)

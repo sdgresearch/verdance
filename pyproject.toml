@@ -1,45 +1,67 @@
 [project]
-name = "greenpy"
-version = "0.2.0"
-description = "Measure the 3-30-300 rule of urban greening using Apache Sedona"
+name = "verdance"
+dynamic = ["version"]
+description = "Measure the 3-30-300 rule of urban greening for any city, using Apache Sedona"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Andrés Camilo Zúñiga-González", email = "ancazugo@hotmail.com" },
 ]
-requires-python = ">=3.12"
-keywords = ["urban-greening", "3-30-300", "apache-sedona", "gis", "geospatial"]
+requires-python = ">=3.12,<3.14"
+keywords = ["urban-greening", "3-30-300", "urban-forest", "tree-canopy", "green-space", "apache-sedona", "gis", "geospatial"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+# apache-sedona and pyspark are pinned to the Sedona/Spark jars in utils/sedona_config.py
 dependencies = [
-    "apache-sedona[kepler-map,pydeck-map]==1.9.0",
+    "affine>=2.4",
+    "apache-sedona==1.9.0",
     "duckdb>=1.3",
     "earthengine-api>=1.7.12",
     "eemont>=2025.7.1",
     "geopandas>=1.1.2",
-    "h3>=4.5.0",
     "loguru>=0.7.3",
+    "networkx>=3.4",
     "numba>=0.68.0",
+    "numpy>=2.0",
     "osmnx>=2.0.7",
     "overturemaps>=1.0.1",
-    "pya5>=0.9.0",
+    "pandas>=2.2",
+    "pya5>=1.0",
     "pyarrow==19.0.1",
+    "pyogrio>=0.10",
     "pyproj>=3.6.0",
     "pyspark==3.5.5",
     "python-dotenv>=1.2.1",
     "pyyaml>=6.0.3",
+    "rasterio>=1.4",
     "rasterstats>=0.20.0",
+    "requests>=2.32",
     "rhealpixdggs>=0.6.0",
     "rioxarray>=0.21.0",
     "scipy>=1.13.0",
+    # pyspark 3.5 imports distutils, which Python 3.12 dropped; setuptools provides it
+    "setuptools>=70",
+    "shapely>=2.0",
     "tqdm>=4.67.3",
     "typer>=0.21.1",
+    "xarray>=2025.1",
     "xee>=0.1.1",
 ]
 
 [project.scripts]
-greenpy = "greenpy.cli:main"
+verdance = "verdance.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/ancazugo/greenpy"
-Repository = "https://github.com/ancazugo/greenpy"
+Homepage = "https://github.com/sdgresearch/verdance"
+Repository = "https://github.com/sdgresearch/verdance"
+Issues = "https://github.com/sdgresearch/verdance/issues"
 
 [dependency-groups]
 dev = [
@@ -50,11 +72,26 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
+[tool.hatch.version]
+path = "src/verdance/__init__.py"
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/greenpy"]
+packages = ["src/verdance"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/greenpy", "examples", "README.md"]
+# listed explicitly so untracked local files (city configs, notes) never ship
+include = [
+    "src/verdance",
+    "tests",
+    "examples/generic.yaml",
+    "examples/osm.yaml",
+    "examples/open_buildings.yaml",
+    "README.md",
+    "LICENSE",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

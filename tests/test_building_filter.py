@@ -4,12 +4,12 @@ import geopandas as gpd
 import pytest
 from shapely.geometry import Point
 
-from greenpy.config.schema import ColumnMapping, GreenPyConfig, DataPaths, OutputPaths
-from greenpy.pipeline import _filter_buildings
+from verdance.config.schema import ColumnMapping, VerdanceConfig, DataPaths, OutputPaths
+from verdance.pipeline import _filter_buildings
 
 
 def _cfg(use_col=None, use_value=None):
-    return GreenPyConfig(
+    return VerdanceConfig(
         study_area_name="t", crs="EPSG:27700",
         data=DataPaths(buildings="b.parquet", parks_sites="p", parks_access="pa",
                        roads="r", census_boundaries="c"),

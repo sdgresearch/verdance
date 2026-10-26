@@ -2,7 +2,7 @@ import shutil
 
 import pytest
 
-from greenpy.viz.catalog import build_catalog, describe
+from verdance.viz.catalog import build_catalog, describe
 
 from viz_fixtures import make_config, make_outputs, make_trees
 
@@ -40,7 +40,7 @@ def test_merge_outputs_preferred(tmp_path):
 
 
 def test_missing_buildings_is_explained(tmp_path):
-    with pytest.raises(FileNotFoundError, match="run at least one greenpy module"):
+    with pytest.raises(FileNotFoundError, match="run at least one verdance module"):
         build_catalog(make_config(tmp_path))
 
 
@@ -120,7 +120,7 @@ def test_grid_runs_sit_beside_census_runs(tmp_path):
 
 
 def test_visibility_and_height_metrics():
-    from greenpy.viz.catalog import describe
+    from verdance.viz.catalog import describe
 
     m = describe("visible_trees_ground_50m")
     assert m.kind == "count" and m.threshold == 3 and m.module == "Visibility"
@@ -133,8 +133,8 @@ def test_visibility_and_height_metrics():
 def test_rule_gradients_follow_merge_metadata(tmp_path):
     import pandas as pd
 
-    from greenpy.merge import write_rule_parquet
-    from greenpy.viz.catalog import _rule_gradients
+    from verdance.merge import write_rule_parquet
+    from verdance.viz.catalog import _rule_gradients
 
     df = pd.DataFrame({"building_id": [1], "tree_count_50m": [4], "visible_trees_50m": [1],
                        "distance_euclidean": [10.0], "meets_3": [False], "meets_3_30_300": [False]})

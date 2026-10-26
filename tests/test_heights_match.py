@@ -8,11 +8,11 @@ import rasterio
 from rasterio.transform import from_origin
 from shapely.geometry import box
 
-from greenpy.config.schema import GreenPyConfig, HeightSourceSpec, HeightsConfig
-from greenpy.heights.enrich import coalesce, coverage_table
-from greenpy.heights.match import match_by_overlap, zonal_heights
-from greenpy.heights.native import NativeHeights
-from greenpy.osm import parse_osm_height
+from verdance.config.schema import VerdanceConfig, HeightSourceSpec, HeightsConfig
+from verdance.heights.enrich import coalesce, coverage_table
+from verdance.heights.match import match_by_overlap, zonal_heights
+from verdance.heights.native import NativeHeights
+from verdance.osm import parse_osm_height
 
 CRS = "EPSG:32632"
 
@@ -23,8 +23,8 @@ def _footprints(*geoms, ids=None):
 
 
 def _cfg(**heights):
-    from greenpy.config.schema import ColumnMapping, DataPaths, OutputPaths
-    return GreenPyConfig(
+    from verdance.config.schema import ColumnMapping, DataPaths, OutputPaths
+    return VerdanceConfig(
         study_area_name="t", crs=CRS,
         data=DataPaths("b", "p", "a", "r", "c"), columns=ColumnMapping(geo_levels=["x"]),
         output=OutputPaths("/nonexistent"), heights=HeightsConfig(**heights),

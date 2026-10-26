@@ -43,9 +43,9 @@ from rasterio.windows import from_bounds
 from scipy import ndimage
 from shapely.geometry import box
 
-from greenpy.optional.chm_sources import chm_mosaic
-from greenpy.optional.tree_eval import match_points
-from greenpy.optional.tree_segmentation import SegmentationParams, get_params, ground_scale, segment_array, window_cap
+from verdance.optional.chm_sources import chm_mosaic
+from verdance.optional.tree_eval import match_points
+from verdance.optional.tree_segmentation import SegmentationParams, get_params, ground_scale, segment_array, window_cap
 
 LONDON_CSV = Path("/maps/acz25/phd-thesis-data/input/tree_surveys/London/Borough_tree_list_2021July.csv")
 VOM_DIR = "/maps/acz25/phd-thesis-data/input/Defra/VOM/unzipped_tiles"

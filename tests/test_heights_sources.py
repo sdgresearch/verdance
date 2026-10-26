@@ -7,17 +7,17 @@ import rasterio
 from rasterio.transform import from_origin
 from shapely.geometry import box
 
-from greenpy.config.schema import ColumnMapping, DataPaths, GreenPyConfig, HeightSourceSpec, OutputPaths
-from greenpy.heights import SOURCE_NAMES, get_source
-from greenpy.heights.base import HeightContext
-from greenpy.heights.gba import parse_tile, tiles_for_bounds
-from greenpy.heights.gee import tiles_with_footprints
+from verdance.config.schema import ColumnMapping, DataPaths, VerdanceConfig, HeightSourceSpec, OutputPaths
+from verdance.heights import SOURCE_NAMES, get_source
+from verdance.heights.base import HeightContext
+from verdance.heights.gba import parse_tile, tiles_for_bounds
+from verdance.heights.gee import tiles_with_footprints
 
 CRS = "EPSG:32632"
 
 
 def _cfg():
-    return GreenPyConfig(
+    return VerdanceConfig(
         study_area_name="t", crs=CRS, data=DataPaths("b", "p", "a", "r", "c"),
         columns=ColumnMapping(geo_levels=["x"]), output=OutputPaths("/nonexistent"),
     )

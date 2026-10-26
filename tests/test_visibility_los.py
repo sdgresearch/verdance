@@ -5,7 +5,7 @@ import math
 import numpy as np
 import pytest
 
-from greenpy.optional.visibility.los import pair_min_eye_height, ray_zreq_reference
+from verdance.optional.visibility.los import pair_min_eye_height, ray_zreq_reference
 
 RES = 0.5
 
@@ -154,7 +154,7 @@ def test_crowns_overlapping_the_target_do_not_block_inside_it():
 
 def _terrain_pair(ground, extra, obs, target, x0=0.0, y0=20.0, z_cap=np.inf):
     """One-ray pair over absolute surface ground + extra; target height relative to its ground."""
-    from greenpy.optional.visibility.dsm import sample_grid
+    from verdance.optional.visibility.dsm import sample_grid
 
     dsm = (ground + extra).astype(np.float32)
     bldg = (ground + extra).astype(np.float32)
@@ -201,7 +201,7 @@ def test_terrain_kernel_matches_reference(seed):
         extra[j:j + 3, i:i + 3] = rng.uniform(3, 20)
     surf = (ground + extra).astype(np.float32)
     cid = np.zeros((1, 40, 40), np.int32)
-    from greenpy.optional.visibility.dsm import sample_grid
+    from verdance.optional.visibility.dsm import sample_grid
     for _ in range(15):
         ox, oy, tx, ty = rng.uniform(1, 39, 4)
         tz = rng.uniform(3, 15)

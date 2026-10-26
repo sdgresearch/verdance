@@ -7,9 +7,9 @@ import pytest
 
 pytest.importorskip("duckdb")
 
-from greenpy.viz.catalog import build_catalog
-from greenpy.viz.store import connect, ensure_store, read_meta
-from greenpy.viz.tiles import TileStore
+from verdance.viz.catalog import build_catalog
+from verdance.viz.store import connect, ensure_store, read_meta
+from verdance.viz.tiles import TileStore
 
 from viz_fixtures import make_config, make_outputs, make_trees
 
@@ -128,7 +128,7 @@ def test_point_trees_without_size(tmp_path):
 def test_quantiles_survive_a_dominant_value():
     """83 of 85 units at 0 (e.g. % meeting 3-30-300): the non-zero units still get their own classes."""
     import duckdb
-    from greenpy.viz.store import N_CLASSES, metric_stats
+    from verdance.viz.store import N_CLASSES, metric_stats
 
     con = duckdb.connect()
     con.execute("CREATE TABLE units AS SELECT 0.0 AS pct_meets_3 FROM range(83) UNION ALL SELECT 7.0 UNION ALL SELECT 22.6")
@@ -225,7 +225,7 @@ def test_visibility_metrics_and_both_rules(tmp_path):
     """Visibility outputs and a Merge rule table with both "3" metrics."""
     import pandas as pd
 
-    from greenpy.merge import write_rule_parquet
+    from verdance.merge import write_rule_parquet
 
     make_outputs(tmp_path, merged=True)
     (tmp_path / "Visibility").mkdir()

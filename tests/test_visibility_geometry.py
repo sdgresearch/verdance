@@ -6,9 +6,9 @@ import pytest
 import shapely
 from shapely.geometry import MultiPolygon, Point, box
 
-from greenpy.optional.visibility.observers import facade_points, floor_eyes
-from greenpy.optional.visibility.pairs import building_counts, eligible_pairs
-from greenpy.optional.visibility.targets import tree_targets
+from verdance.optional.visibility.observers import facade_points, floor_eyes
+from verdance.optional.visibility.pairs import building_counts, eligible_pairs
+from verdance.optional.visibility.targets import tree_targets
 
 
 @pytest.mark.parametrize("geom", [box(0, 0, 10, 10), shapely.reverse(box(0, 0, 10, 10))])

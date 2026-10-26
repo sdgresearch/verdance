@@ -8,26 +8,26 @@
 #   python scripts/prepare_geoboundaries.py --iso KEN --adm1 Nairobi --levels 3 \
 #       --out /scratch/acz25/greenpy_runs/nairobi/input/nairobi_wards.parquet
 #   export SPARK_LOCAL_DIRS=/scratch/acz25/spark_tmp
-#   greenpy run -c examples/nairobi.yaml -p Trees --geo_level ADM2_code --parallel --n_workers 32
-#   greenpy run -c examples/nairobi.yaml -p T3 --geo_level ADM2_code --buffer 50
-#   greenpy run -c examples/nairobi.yaml -p T3 --geo_level ADM2_code --buffer 100
-#   greenpy run -c examples/nairobi.yaml -p T30 --geo_level ADM2_code --gee_scale 10
-#   greenpy run -c examples/nairobi.yaml -p T300 --geo_level ADM2_code
-#   greenpy run -c examples/nairobi.yaml -p Tree_count --geo_level ADM2_code
-#   greenpy run -c examples/nairobi.yaml -p T30_buildings --geo_level ADM2_code --buffer 50 --gee_scale 10
-#   greenpy run -c examples/nairobi.yaml -p T30_buildings --geo_level ADM2_code --buffer 100 --gee_scale 10
-#   greenpy run -c examples/nairobi.yaml -p Trees --geo_code context   # trees in the 100 m ring around the county
-#   greenpy run -c examples/nairobi.yaml -p Heights   # GBA, UT-GLOBUS, Open Buildings 2.5D, GHS via GEE
-#   greenpy run -c examples/nairobi.yaml -p Visibility --geo_level ADM2_code --buffer 50
-#   greenpy run -c examples/nairobi.yaml -p Visibility --geo_level ADM2_code --buffer 100
-#   greenpy run -c examples/nairobi.yaml -p Merge --t3_buffers 50 --t3_buffers 100
+#   verdance run -c examples/nairobi.yaml -p Trees --geo_level ADM2_code --parallel --n_workers 32
+#   verdance run -c examples/nairobi.yaml -p T3 --geo_level ADM2_code --buffer 50
+#   verdance run -c examples/nairobi.yaml -p T3 --geo_level ADM2_code --buffer 100
+#   verdance run -c examples/nairobi.yaml -p T30 --geo_level ADM2_code --gee_scale 10
+#   verdance run -c examples/nairobi.yaml -p T300 --geo_level ADM2_code
+#   verdance run -c examples/nairobi.yaml -p Tree_count --geo_level ADM2_code
+#   verdance run -c examples/nairobi.yaml -p T30_buildings --geo_level ADM2_code --buffer 50 --gee_scale 10
+#   verdance run -c examples/nairobi.yaml -p T30_buildings --geo_level ADM2_code --buffer 100 --gee_scale 10
+#   verdance run -c examples/nairobi.yaml -p Trees --geo_code context   # trees in the 100 m ring around the county
+#   verdance run -c examples/nairobi.yaml -p Heights   # GBA, UT-GLOBUS, Open Buildings 2.5D, GHS via GEE
+#   verdance run -c examples/nairobi.yaml -p Visibility --geo_level ADM2_code --buffer 50
+#   verdance run -c examples/nairobi.yaml -p Visibility --geo_level ADM2_code --buffer 100
+#   verdance run -c examples/nairobi.yaml -p Merge --t3_buffers 50 --t3_buffers 100
 #     (the rule's "30" is the ward canopy; add --rule_t30_buffer 50 or 100 to use per-building canopy;
 #     add --rule_t3_metric visibility for "3" = trees in view from some floor)
 # H3 aggregation beside the wards (repeat with --dggs_resolution 8 for ~0.7 km2 cells):
-#   greenpy run -c examples/nairobi.yaml -p T30 --geo_level ADM2_code --gee_scale 10 --dggs h3 --dggs_resolution 9
-#   greenpy run -c examples/nairobi.yaml -p Tree_count --geo_level ADM2_code --dggs h3 --dggs_resolution 9
-#   greenpy run -c examples/nairobi.yaml -p Merge --t3_buffers 50 --t3_buffers 100 --dggs h3 --dggs_resolution 9
-#   greenpy viz -c examples/nairobi.yaml  # unit menu: wards, sub-counties or H3 res 8 / 9
+#   verdance run -c examples/nairobi.yaml -p T30 --geo_level ADM2_code --gee_scale 10 --dggs h3 --dggs_resolution 9
+#   verdance run -c examples/nairobi.yaml -p Tree_count --geo_level ADM2_code --dggs h3 --dggs_resolution 9
+#   verdance run -c examples/nairobi.yaml -p Merge --t3_buffers 50 --t3_buffers 100 --dggs h3 --dggs_resolution 9
+#   verdance viz -c examples/nairobi.yaml  # unit menu: wards, sub-counties or H3 res 8 / 9
 
 study_area_name: Nairobi
 crs: EPSG:32737  # WGS 84 / UTM zone 37S

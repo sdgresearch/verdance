@@ -1,7 +1,7 @@
 import pytest
 import yaml
 
-from greenpy.config.loader import load_config
+from verdance.config.loader import load_config
 
 MINIMAL = {
     "study_area_name": "testville",
@@ -64,7 +64,7 @@ def test_deprecated_alias_cannot_combine(tmp_path):
 
 
 def test_unit_output_names_get_the_grid_suffix():
-    from greenpy.pipeline import unit_output_name
+    from verdance.pipeline import unit_output_name
 
     assert unit_output_name("T30") == "T30"
     assert unit_output_name("T30", "h3", 9) == "T30_h3_9"

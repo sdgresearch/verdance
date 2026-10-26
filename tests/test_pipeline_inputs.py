@@ -6,9 +6,9 @@ import pytest
 import yaml
 from shapely.geometry import LineString, Point, box
 
-from greenpy.config.loader import load_config
-from greenpy.config.schema import ColumnMapping, DataPaths, GreenPyConfig, OutputPaths
-from greenpy.pipeline import (
+from verdance.config.loader import load_config
+from verdance.config.schema import ColumnMapping, DataPaths, VerdanceConfig, OutputPaths
+from verdance.pipeline import (
     _build_overlay, _derive_road_nodes, _ensure_edge_lengths, _filter_park_access, _filter_parks,
 )
 
@@ -16,7 +16,7 @@ CRS = "EPSG:27700"
 
 
 def _cfg(**kwargs):
-    return GreenPyConfig(
+    return VerdanceConfig(
         study_area_name="t", crs=CRS,
         data=DataPaths(buildings="b", parks_sites="p", parks_access="pa", roads="r", census_boundaries="c"),
         columns=ColumnMapping(geo_levels=["LAD22CD"], building_id="id"),

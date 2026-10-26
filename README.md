@@ -1,14 +1,147 @@
-# greenpy
+# verdance
 
 Measure the **3-30-300 rule** of urban greening for any city, powered by [Apache Sedona](https://sedona.apache.org/).
 
 The 3-30-300 rule ([Konijnendijk, 2023](https://doi.org/10.1007/s11676-022-01523-z)) states that every home should:
 
-1. **See at least 3 trees** — measured here as the number of trees within a buffer of each building (**T3**),
+1. **See at least 3 trees** — measured here as the number of trees within a buffer of each building (**T3**), or the number visible from its windows (**Visibility**),
 2. **Sit in a neighbourhood with at least 30 % canopy cover** (**T30**),
 3. **Be within 300 m of a public green space** (**T300**).
 
-greenpy computes each metric per building and per census unit from standard geospatial inputs, evaluates the rule for every building, and merges everything into a single analysis-ready table.
+verdance computes each metric per building and per census unit from standard geospatial inputs — or from global open data (Overture Maps, OpenStreetMap, the Meta/WRI canopy height model) where local data is missing — evaluates the rule for every building, merges everything into one analysis-ready table, and serves an interactive map of the results.
+
+**Contents:** [Installation](#installation) · [Quick start](#quick-start) · [Where files go](#where-files-go-caches-temporary-files-and-logs) · [Docker](#docker) · [Modules](#modules) · [Input data](#input-data) · [Configuration](#configuration) · [Usage](#usage) · [Merge and the rule](#merge-and-the-3-30-300-rule) · [Visualising results](#visualising-results) · [Output layout](#output-layout) · [Troubleshooting](#troubleshooting) · [Development](#development)
+
+## Installation
+
+verdance needs **Python 3.12 or 3.13** and **Java 11–17** (Spark 3.5 runs on Java 17 at most; newer Java versions fail).
+
+```bash
+pip install verdance          # or: uv pip install verdance / uv tool install verdance / pipx install verdance
+verdance --version
+```
+
+**Java.** Install a JDK 17 and make sure `java -version` reports it, or point `JAVA_HOME` at it:
+
+```bash
+sudo apt install openjdk-17-jre-headless          # Debian / Ubuntu
+brew install openjdk@17                           # macOS (then follow brew's note to link it)
+conda install -c conda-forge openjdk=17           # any OS, inside a conda environment
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64   # if another Java is the default
+```
+
+The first Spark-based run downloads the Sedona jars (~110 MB, once) into Spark's Ivy cache (`~/.ivy2`, or `VERDANCE_IVY_DIR`), so it needs internet access. No Java at hand? Use the [Docker image](#docker), which bundles Java and the jars.
+
+**Google Earth Engine (optional).** Some data sources are read from Earth Engine: the `Spectral` module, `canopy_height_ee_path`, `data.buildings: open_buildings`, the remote building-height sources and terrain for Visibility. They need a Google Cloud project with Earth Engine enabled: authenticate once with `earthengine authenticate` (installed with verdance) and set `gee_project: <your-project>` in the config. Everything else — including the global open-data sources Overture, OpenStreetMap and the Meta canopy height model from AWS — needs no account.
+
+**Settings from a `.env` file.** verdance reads a `.env` file in the working directory (or a parent directory) at startup; variables already set in the environment win. Every setting is optional:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64   # or JDK_HOME, see "Where files go"
+VERDANCE_CACHE_DIR=/big/disk/verdance_cache    # shared download cache
+GEE_PROJECT_NAME=my-gee-project                # Earth Engine project when the config has no gee_project
+```
+
+## Quick start
+
+A study area is described by one YAML file. The smallest useful config needs only census boundaries of your own — one polygon per unit, with a column for each level of the hierarchy — and takes everything else from global open data:
+
+```yaml
+# mycity.yaml
+study_area_name: MyCity
+crs: EPSG:32630                   # a projected CRS in metres covering the city (e.g. its UTM zone)
+
+data:
+  census_boundaries: /path/to/wards.gpkg   # one polygon per unit, e.g. columns district_code, ward_code
+  buildings: overture             # Overture Maps footprints
+  parks_sites: overture           # Overture parks and recreation grounds
+  parks_access: osm               # OSM entrances, else where park boundaries meet roads
+  roads: osm                      # OSM walking network
+  meta_chm: v1                    # Meta/WRI 1 m canopy height from AWS: the "30"
+  trees_dir: /path/to/output/trees   # filled by `-p Trees` below: the "3"
+
+tree_segmentation:
+  source: meta                    # segment the trees from the same canopy height model
+  preset: meta
+
+park_min_area_ha: 0.5             # ignore green spaces under 0.5 ha (WHO guidance)
+terrain:
+  source: null                    # flat ground for Visibility (the fabdem default needs GEE)
+
+columns:
+  geo_levels: [district_code, ward_code]   # coarsest → finest
+
+output:
+  base_dir: /path/to/output
+```
+
+Then run the modules one at a time, `Merge` last, and open the map:
+
+```bash
+verdance run -c mycity.yaml -p Trees                  # segment tree crowns from the canopy height model
+verdance run -c mycity.yaml -p T3 --buffer 50         # trees within 50 m of each building
+verdance run -c mycity.yaml -p T30                    # canopy cover per ward
+verdance run -c mycity.yaml -p T300                   # distance to the nearest park
+verdance run -c mycity.yaml -p Tree_count
+verdance run -c mycity.yaml -p Visibility --buffer 50 # optional: trees in view from the windows
+verdance run -c mycity.yaml -p Merge --t3_buffers 50  # the rule per building and per unit
+verdance viz -c mycity.yaml                           # interactive map at http://localhost:8765
+```
+
+The first run fetches the buildings, parks and roads once and caches them as parquet under `<output.base_dir>/database/`. The results are `database/T3_30_300_buildings.parquet` (one row per building, with `meets_3`, `meets_30`, `meets_300` and `meets_3_30_300`) and `database/T3_30_300_spectral.parquet` (one row per unit, with the share of buildings meeting each criterion). [`examples/generic.yaml`](https://github.com/sdgresearch/verdance/blob/master/examples/generic.yaml) documents every config key; download it with
+
+```bash
+curl -O https://raw.githubusercontent.com/sdgresearch/verdance/master/examples/generic.yaml
+```
+
+## Where files go: caches, temporary files and logs
+
+verdance writes nothing to the directory you run it from. Everything goes to the places below; on a shared machine or a small home directory, point the caches at a large disk.
+
+| What | Default location | Change it with |
+|---|---|---|
+| Results, parquet cache of the inputs, `viz.duckdb` | `<output.base_dir>/` and `<output.base_dir>/database/` | `output.base_dir` in the config |
+| Logs (one file per module, plus `viz.log`) | `<output.base_dir>/logs/` | — |
+| Downloads shared between runs: canopy-height tiles, Earth Engine rasters (heights, terrain, canopy), OpenStreetMap responses | `<output.base_dir>/database/chm_cache/` | `data.chm_cache_dir` in the config, else the `VERDANCE_CACHE_DIR` environment variable |
+| Sedona/Spark jars (~110 MB, downloaded once) | `~/.ivy2` | `VERDANCE_IVY_DIR` |
+| DuckDB spatial extension for `verdance viz` (downloaded once) | `~/.duckdb/extensions` | `VERDANCE_DUCKDB_EXTENSIONS` |
+| Temporary files: Spark shuffle and spill files, JVM temp files, Spark's warehouse directory | the system temp directory | `TMPDIR` (`SPARK_LOCAL_DIRS` overrides it for Spark's shuffle files) |
+| Earth Engine credentials | `~/.config/earthengine/` | `earthengine authenticate` |
+
+Other environment variables:
+
+| Variable | Meaning |
+|---|---|
+| `JAVA_HOME` | The Java 11–17 installation Spark runs on. `JDK_HOME` takes precedence: an absolute path, or the name of a JDK directory under `~/.jdk/` (the layout of the [install-jdk](https://pypi.org/project/install-jdk/) package) |
+| `SPARK_DRIVER_MEMORY` | Spark's heap (e.g. `16g`). Spark runs locally, so this is the memory for all its work. Default: three quarters of the machine's RAM, at most `64g` |
+| `GEE_PROJECT_NAME` | Earth Engine project used when the config has no `gee_project` |
+
+The parquet cache under `database/` is built once from the inputs. **Delete `<output.base_dir>/database/` after changing input files or column mappings** so it is rebuilt.
+
+## Docker
+
+The image bundles Python 3.12, OpenJDK 17, the Sedona jars and DuckDB's spatial extension, so it runs without Java installed and without network access for them. Build it from a clone of the repository:
+
+```bash
+git clone https://github.com/sdgresearch/verdance.git && cd verdance
+docker build -t verdance .
+docker run --rm verdance --version
+```
+
+Mount a project directory holding the config, the inputs and the output folder, and use **container paths** in the config (e.g. `census_boundaries: /work/data/wards.gpkg`, `base_dir: /work/output`). The image's entrypoint is `verdance`, so pass only its arguments:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD":/work \
+  verdance run -c /work/mycity.yaml -p T3 --buffer 50
+```
+
+`--user "$(id -u):$(id -g)"` makes the output files yours on a standard Docker install. With **rootless Docker** use `--user 0:0` instead: there the container's root is you, while any other user maps to a host ID you can't write as. Docker Desktop needs neither. To keep downloads between containers, add a cache mount: `-v "$HOME/verdance_cache":/cache -e VERDANCE_CACHE_DIR=/cache`.
+
+- **Memory.** The image defaults to `SPARK_DRIVER_MEMORY=4g`; raise it on a bigger host with `-e SPARK_DRIVER_MEMORY=32g`.
+- **Earth Engine.** Authenticate once on the host (`earthengine authenticate`), then mount the credentials: `-v "$HOME/.config/earthengine":/home/verdance/.config/earthengine:ro`, and set `gee_project` in the config.
+- **The map.** Publish the port and listen on all interfaces inside the container: `docker run --rm -p 8765:8765 -v "$PWD":/work verdance viz -c /work/mycity.yaml --host 0.0.0.0 --no-browser`, then open http://localhost:8765.
+- **docker compose.** [`docker-compose.yml`](https://github.com/sdgresearch/verdance/blob/master/docker-compose.yml) mounts `./data` at `/data`, `./config` at `/config` and `./output` at `/output` (set `output.base_dir: /output`), and keeps a download cache in `./cache`: `docker compose run --rm verdance run -c /config/mycity.yaml -p T3 --buffer 50`.
 
 ## Modules
 
@@ -16,7 +149,7 @@ greenpy computes each metric per building and per census unit from standard geos
 |---|---|---|
 | `Trees` | Segments individual tree crowns from a canopy height model (local CHM tiles or the global Meta/WRI 1 m CHM) into `data.trees_dir`, for T3/Tree_count/Visibility | `trees_<geo_code>.parquet`: `treeID`, `height`, `area`, `top_x`, `top_y`, crown geometry |
 | `T3` | Trees (height and area strictly above `--tree_height`/`--tree_area`) whose centroid lies within `--buffer` metres of each building | `building_id`, `tree_count_<buffer>m`, sub-geo code |
-| `T30` | Canopy cover % per sub-geo unit, from CHM raster tiles, a GEE canopy-height asset, or tree polygons | sub-geo code, `canopy_cover`, `total_pixels` |
+| `T30` | Canopy cover % per sub-geo unit, from CHM raster tiles, the Meta canopy height model on AWS, a GEE canopy-height asset, or tree polygons | sub-geo code, `canopy_cover`, `total_pixels` |
 | `T30_buildings` | Canopy cover % within `--buffer` metres of each building (distributed Sedona `RS_ZonalStats` for raster sources), same canopy sources as T30 | `building_id`, `tree_pixels`, `total_pixels`, `canopy_cover` |
 | `T300` | Road-network and Euclidean distance from each building to the nearest park | `building_id`, distances, closest park ids, sub-geo code |
 | `Tree_count` | Total tree count per sub-geo unit, each tree counted once in the unit containing its centroid (no size filter, unlike T3) | sub-geo code, `tree_count` |
@@ -25,89 +158,22 @@ greenpy computes each metric per building and per census unit from standard geos
 | `Spectral` *(optional)* | Spectral indices (NDVI, NDWI, …) per sub-geo unit via Google Earth Engine: a per-pixel temporal composite over the date range (`--composite max`, the default, or `median`), then the spatial median over each unit | sub-geo code, one column per index |
 | `Merge` | Evaluates the 3-30-300 rule per building and consolidates all module outputs into `database/T3_30_300_spectral.parquet` | one row per geo unit (see *Merge* below) |
 
-## Requirements
-
-- Python ≥ 3.12, managed with [uv](https://docs.astral.sh/uv/)
-- A JDK (for Spark/Sedona), pointed to by `JDK_HOME` — Java 11–17 (Sedona ≥ 1.9 jars are built for Java 11+; Spark 3.5 supports up to 17)
-- For `Spectral` only: a Google Earth Engine project and a boundaries asset uploaded to GEE
-
-## Installation
-
-```bash
-uv sync
-source /maps/acz25/envs/greenpy/bin/activate   # project environment
-```
-
-> The environment lives outside the repo, so installing new dependencies needs the `--active` flag: `uv add --active <package>`.
-
-Create a `.env` file in the repo root:
-
-```bash
-DATA_DIR=/path/to/your/data
-JDK_HOME=/path/to/jdk            # used to set JAVA_HOME for Spark
-GEE_PROJECT_NAME=my-gee-project  # only needed for Spectral
-```
-
-## Run with Docker
-
-If you can't install a compatible JDK natively, use the Docker image — it bundles OpenJDK 17, Python 3.12, and the Sedona JARs (pre-downloaded at build time, so the container runs offline).
-
-```bash
-docker build -t greenpy .
-```
-
-Mount your data and a writable output dir, and reference the **container** paths in your YAML config (e.g. `data.buildings: /data/buildings.gpkg`, `output.base_dir: /work/output`):
-
-```bash
-docker run --rm \
-  -v /path/to/data:/data -e DATA_DIR=/data \
-  -v "$PWD/output":/work \
-  greenpy run -c /data/config.yaml -p T3 --buffer 100
-```
-
-The `greenpy` entrypoint is baked in, so pass only the CLI arguments. Outputs, `logs/`, `spark-warehouse/` and `cache/` are written under `/work`.
-
-**Spark memory.** The image defaults to a laptop-friendly `SPARK_DRIVER_MEMORY=4g` / `SPARK_EXECUTOR_MEMORY=2g`. Raise them on a bigger host:
-
-```bash
-docker run --rm -e SPARK_DRIVER_MEMORY=32g -e SPARK_EXECUTOR_MEMORY=16g ... greenpy run ...
-```
-
-(These env vars also work for native runs; unset, they keep the original 64g/32g defaults.)
-
-**docker compose.** [`docker-compose.yml`](docker-compose.yml) wires up the `./data`, `./config` and `./output` mounts:
-
-```bash
-docker compose run --rm greenpy run -c /config/city.yaml -p T3 --buffer 100
-```
-
-**GEE features** (`Spectral`, GEE canopy, `open_buildings`) need Google Earth Engine, whose login is interactive. Authenticate once on the host (`earthengine authenticate`), then mount the credentials and set the project — see the commented lines in `docker-compose.yml`, or add to `docker run`:
-
-```bash
--v "$HOME/.config/earthengine":/home/greenpy/.config/earthengine:ro \
--e GEE_PROJECT_NAME=my-gee-project
-```
-
-The core 3-30-300 pipeline (T3, T30, T300, Tree_count, Visibility, Merge) with local data needs no GEE.
-
-**Results map.** Publish the port and bind to all interfaces inside the container: `docker run --rm -p 8765:8765 ... greenpy viz -c /data/config.yaml --host 0.0.0.0 --no-browser`, then open http://localhost:8765.
-
 ## Input data
 
 All inputs are vector files readable by GeoPandas (GeoPackage, Shapefile, GeoJSON, (Geo)Parquet…):
 
-- **Buildings** — footprint polygons with a unique id column. Instead of a file, `data.buildings` also accepts `osm` (OpenStreetMap; `height` and `building:levels` tags are kept where mapped), `overture` (Overture Maps, global; `height` and `num_floors` are kept but sparse outside major cities), or `open_buildings` (Google Open Buildings v3 via GEE, needs `gee_project`; no heights, and covers Africa, South/Southeast Asia and Latin America & the Caribbean only — **not** Europe or North America). Visibility also needs building heights, which the `Heights` process attaches from global datasets when the footprints have none (see *Building heights* below)
+- **Census boundaries** (required, always a file) — one polygon per unit of the *finest* geography, with a column for every level of the hierarchy (e.g. district and tract codes). They define the study area, including where remote layers are fetched
+- **Buildings** — footprint polygons with a unique id column (`columns.building_id`). Instead of a file, `data.buildings` also accepts `osm` (OpenStreetMap; `height` and `building:levels` tags are kept where mapped), `overture` (Overture Maps, global; `height` and `num_floors` are kept but sparse outside major cities), or `open_buildings` (Google Open Buildings v3 via GEE, needs `gee_project`; no heights, and covers Africa, South/Southeast Asia and Latin America & the Caribbean only — **not** Europe or North America). Visibility also needs building heights, which the `Heights` process attaches from global datasets when the footprints have none (see *Building heights* below)
 - **Trees** — canopy polygons with height and area attributes (a single file or a directory of tiles), or segment them from a CHM with the `Trees` process (see *Tree segmentation* below)
 - **Canopy for T30** — one of: a directory of CHM raster tiles (`.tif`, `chm_tiles_dir`); the Meta/WRI global canopy height model from AWS (`meta_chm: v1` or `v2`, no account needed); a GEE canopy-height asset (`canopy_height_ee_path`, needs `gee_project`); or the tree polygons above. See *Canopy cover source* below
-- **Parks** — green-space polygons, plus access points (can be the same file). Set `park_min_area_ha` (top-level config key) to ignore small green spaces — the WHO guideline behind the 300 rule uses ≥ 0.5–1 ha. Access points are only filtered along with their parks when `columns.park_access_ref_col` links them
-- **Roads** — edges (and optionally nodes; nodes are derived from edge endpoints if absent). File-based networks must be **noded** (split at every intersection — nodes are derived from segment endpoints only) and reduced to their **largest connected component**, or buildings snapping to isolated fragments get null network distances. `columns.road_edge_length` should hold edge lengths in metres; if the column is missing, lengths are computed from the geometry in the config CRS (with a warning)
-- **Census boundaries** — one polygon per unit of the *finest* geography, with a column for every level of the hierarchy (e.g. district and tract codes)
+- **Parks** — green-space polygons, plus access points (can be the same file), or `osm` / `overture` (parks) and `osm` (access points). Set `park_min_area_ha` (top-level config key) to ignore small green spaces — the WHO guideline behind the 300 rule uses ≥ 0.5–1 ha. Access points are only filtered along with their parks when `columns.park_access_ref_col` links them
+- **Roads** — edges (and optionally nodes; nodes are derived from edge endpoints if absent), or `osm`. File-based networks must be **noded** (split at every intersection — nodes are derived from segment endpoints only) and reduced to their **largest connected component**, or buildings snapping to isolated fragments get null network distances. `columns.road_edge_length` should hold edge lengths in metres; if the column is missing, lengths are computed from the geometry in the config CRS (with a warning)
 
-On the first run, greenpy converts everything to a parquet cache in `<output.base_dir>/database/`, renaming your columns to canonical names. Delete that folder to rebuild the cache after changing input data or column mappings.
+On the first run, verdance converts everything to a parquet cache in `<output.base_dir>/database/`, renaming your columns to canonical names. Delete that folder to rebuild the cache after changing input data or column mappings.
 
 ## Configuration
 
-Each study area is described by a YAML config — see [`examples/generic.yaml`](examples/generic.yaml) for a fully commented template (plus `examples/westminster.yaml`, `examples/anglesey.yaml`, `examples/england.yaml` for UK setups). The key sections:
+Each study area is described by a YAML config — see [`examples/generic.yaml`](https://github.com/sdgresearch/verdance/blob/master/examples/generic.yaml) for a fully commented template of every key. More examples in [`examples/`](https://github.com/sdgresearch/verdance/tree/master/examples): [`osm.yaml`](https://github.com/sdgresearch/verdance/blob/master/examples/osm.yaml) (every layer from OpenStreetMap), [`open_buildings.yaml`](https://github.com/sdgresearch/verdance/blob/master/examples/open_buildings.yaml) (Google Open Buildings), [`nairobi.yaml`](https://github.com/sdgresearch/verdance/blob/master/examples/nairobi.yaml) (a whole city on global open data: Overture buildings and parks, OSM roads, Meta canopy height, global building heights) and UK setups with local data (`westminster.yaml`, `anglesey.yaml`, `england.yaml`). Their paths point to the author's machines: replace them with yours. The key sections:
 
 ```yaml
 study_area_name: MyCity
@@ -119,7 +185,7 @@ data:                    # paths to the inputs above
   chm_tiles_dir: null    # alternative to trees_dir for T30
   ...
 
-columns:                 # your column names → greenpy's canonical names
+columns:                 # your column names → verdance's canonical names
   building_id: building_id
   tree_height_col: height
   tree_area_col: area
@@ -133,20 +199,20 @@ output:
 
 ## Usage
 
-Run one module at a time; `Merge` last:
+Run one module at a time; `Merge` last. `verdance run --help` lists every option.
 
 ```bash
-greenpy run -c config.yaml -p Trees      # optional: segment trees from a CHM into trees_dir
-greenpy run -c config.yaml -p T3 --buffer 100
-greenpy run -c config.yaml -p T30
-greenpy run -c config.yaml -p T30_buildings --buffer 100
-greenpy run -c config.yaml -p T300
-greenpy run -c config.yaml -p Tree_count
-greenpy run -c config.yaml -p Heights         # building heights (Visibility builds them if missing)
-greenpy run -c config.yaml -p Visibility --buffer 50   # optional: trees in view
-greenpy run -c config.yaml -p Spectral        # optional, needs GEE
-greenpy run -c config.yaml -p Merge
-greenpy viz -c config.yaml                    # interactive map, see "Visualising results"
+verdance run -c config.yaml -p Trees      # optional: segment trees from a CHM into trees_dir
+verdance run -c config.yaml -p T3 --buffer 100
+verdance run -c config.yaml -p T30
+verdance run -c config.yaml -p T30_buildings --buffer 100
+verdance run -c config.yaml -p T300
+verdance run -c config.yaml -p Tree_count
+verdance run -c config.yaml -p Heights         # building heights (Visibility builds them if missing)
+verdance run -c config.yaml -p Visibility --buffer 50   # optional: trees in view
+verdance run -c config.yaml -p Spectral        # optional, needs GEE
+verdance run -c config.yaml -p Merge
+verdance viz -c config.yaml                    # interactive map, see "Visualising results"
 ```
 
 Useful options:
@@ -169,7 +235,7 @@ Useful options:
 T30 and T30_buildings pick their canopy source by what's configured, in priority order:
 
 1. **CHM raster tiles** (`chm_tiles_dir`) — local `.tif` tiles, binarised to a canopy/no-canopy mask between `--low_threshold` and `--high_threshold` metres.
-2. **Meta/WRI canopy height from AWS** (`meta_chm: v1` or `v2`) — the tiles covering the area are downloaded once from Meta's public bucket into the CHM cache (`data.chm_cache_dir`, else `$GREENPY_CACHE_DIR`), cropped, binarised at native ~1 m resolution and reprojected to the config CRS; masks are cached under `<base_dir>/database/meta_canopy/`, named by geo code, release and height band.
+2. **Meta/WRI canopy height from AWS** (`meta_chm: v1` or `v2`) — the tiles covering the area are downloaded once from Meta's public bucket into the CHM cache (`data.chm_cache_dir`, else `$VERDANCE_CACHE_DIR`), cropped, binarised at native ~1 m resolution and reprojected to the config CRS; masks are cached under `<base_dir>/database/meta_canopy/`, named by geo code, release and height band.
 
    ```yaml
    data:
@@ -177,7 +243,7 @@ T30 and T30_buildings pick their canopy source by what's configured, in priority
    ```
 
    - `v1` — the original release (Tolan et al. 2024; `forests/v1/alsgedi_global_v6_float`, zoom-9 tiles of ~150–400 MB). The same data as the GEE asset below: over a 600 m Cambridge square, v1 from AWS gives 7.63 % cover and v1 through GEE 7.62 %.
-   - `v2` — `forests/v2/global/dinov3_global_chm_v2_ml3` (zoom-10 tiles of ~20–250 MB, heights in whole metres). The same Cambridge square gives 12.78 %, so v1 and v2 results are not interchangeable. v2 tiles declare no nodata, so unimaged pixels (e.g. open sea) read 0 like bare ground; greenpy masks pixels outside each tile's imagery footprints (`metadata/<quadkey>.geojson`) as nodata on download and keeps the footprints beside the tile. Footprints can include near-shore sea, which then still counts as no canopy — mostly relevant for T30_buildings buffers on the coast, since census units are usually clipped to the coastline. Imagery dates differ by area (e.g. 2011–2018 in one Norfolk tile); each run logs the range for the area it reads.
+   - `v2` — `forests/v2/global/dinov3_global_chm_v2_ml3` (zoom-10 tiles of ~20–250 MB, heights in whole metres). The same Cambridge square gives 12.78 %, so v1 and v2 results are not interchangeable. v2 tiles declare no nodata, so unimaged pixels (e.g. open sea) read 0 like bare ground; verdance masks pixels outside each tile's imagery footprints (`metadata/<quadkey>.geojson`) as nodata on download and keeps the footprints beside the tile. Footprints can include near-shore sea, which then still counts as no canopy — mostly relevant for T30_buildings buffers on the coast, since census units are usually clipped to the coastline. Imagery dates differ by area (e.g. 2011–2018 in one Norfolk tile); each run logs the range for the area it reads.
 
    `meta_chm` also selects the release wherever the `meta` CHM source is read (`tree_segmentation.source: meta`, raster Visibility); unset, those use v1.
 3. **GEE canopy-height asset** (`canopy_height_ee_path`) — binarised *server-side* in Google Earth Engine and downloaded with [xee](https://github.com/google/Xee); no local canopy data required. Needs `gee_project` in the config. Example asset (global 1 m Meta/WRI canopy height):
@@ -198,8 +264,8 @@ Where T30 reports canopy per sub-geo unit, `T30_buildings` reports it per buildi
 `Trees` derives the crowns T3 counts from a canopy height model, so the "3" can be measured anywhere a CHM exists:
 
 ```bash
-greenpy run -c config.yaml -p Trees --parallel --n_workers 32   # writes data.trees_dir/trees_<geo_code>.parquet
-greenpy run -c config.yaml -p T3 --buffer 50
+verdance run -c config.yaml -p Trees --parallel --n_workers 32   # writes data.trees_dir/trees_<geo_code>.parquet
+verdance run -c config.yaml -p T3 --buffer 50
 ```
 
 The CHM is smoothed, treetops are found with a height-dependent circular local-maximum window, and crowns are grown from them with Dalponte & Coomes (2016) region growing — a numpy/scipy port of the lidR pipeline used for the Defra VOM trees (`preset: legacy_vom` reproduces it: ~99.7 % of crowns match lidR one-to-one, at ~6× lidR's speed on one core). Large areas are processed in blocks with a halo, in parallel; a tree belongs to the block and geo code containing its treetop, so blocks and neighbouring geo codes never duplicate or cut trees.
@@ -247,7 +313,7 @@ heights:
 | `ghs_built_h` | [GHS-BUILT-H R2023A](https://developers.google.com/earth-engine/datasets/catalog/JRC_GHSL_P2023A_GHS_BUILT_H), average net height (2018) | raster (100 m) | global | CC BY 4.0 |
 | `file` | a local vector with a height column, or a raster file / directory (nDSM, GBA.Height 3 m) | either | — | — |
 
-Vector sources lend each footprint the area-weighted height of the source polygons covering it (so a block the source splits into several buildings still matches), when they cover at least `min_overlap` of it. Raster sources give the median (GHS: mean) of the pixels whose centre lies inside the footprint, or of every touched pixel for footprints smaller than a pixel; GHS cells are sampled on a 10 m grid so the mean approximates an area-weighted mean. Remote sources come through Google Earth Engine (`gee_project`) and are cached under the CHM cache directory (`data.chm_cache_dir`, else `$GREENPY_CACHE_DIR`): rasters as tiles aligned to a fixed grid, polygons as small lon/lat chunks, so reruns and neighbouring study areas reuse them. Each source's heights are cached per source (`database/heights/`), and the combined table is `database/building_heights_<key>.parquet`, keyed by the chain and the buildings cache — a new chain builds a new table rather than reusing a stale one. The run logs the share of buildings each source supplied.
+Vector sources lend each footprint the area-weighted height of the source polygons covering it (so a block the source splits into several buildings still matches), when they cover at least `min_overlap` of it. Raster sources give the median (GHS: mean) of the pixels whose centre lies inside the footprint, or of every touched pixel for footprints smaller than a pixel; GHS cells are sampled on a 10 m grid so the mean approximates an area-weighted mean. Remote sources come through Google Earth Engine (`gee_project`) and are cached under the CHM cache directory (`data.chm_cache_dir`, else `$VERDANCE_CACHE_DIR`): rasters as tiles aligned to a fixed grid, polygons as small lon/lat chunks, so reruns and neighbouring study areas reuse them. Each source's heights are cached per source (`database/heights/`), and the combined table is `database/building_heights_<key>.parquet`, keyed by the chain and the buildings cache — a new chain builds a new table rather than reusing a stale one. The run logs the share of buildings each source supplied.
 
 `scripts/evaluate_heights.py` compares the cached sources against reference heights. Against Verisk heights in Cambridge (45,719 buildings; `--levels_col premise_floor_count`):
 
@@ -270,7 +336,7 @@ Two engines share these definitions:
 - **`raster`** (default) — casts the sightlines over a surface model on a `visibility.resolution` grid (1 m): buildings burned at their heights plus the vegetation, which is the canopy height model when one is configured (`data.chm_tiles_dir` or `tree_segmentation.source`; Meta's CHM is cleared on roofs, `mask_chm_buildings`) and the tree crowns at their heights otherwise (`vegetation: auto|chm|crowns`). A numba kernel visits every pixel each sightline crosses, in parallel (`--parallel --n_workers N` sets the threads, default 16); buildings are processed in `tile_size` tiles (2 km). It needs no Spark. Edges are only as sharp as the grid: a sightline that clips a building corner by less than a pixel may be judged differently from exact geometry (set `resolution: 0.5` to tighten).
 - **`vector`** (`--vis_engine vector`) — the exact computation in Sedona SQL, intersecting every sightline with every footprint and crown polygon; a reference for small areas, writing `Visibility_vector/` so Merge never mixes engines. On the synthetic city both engines agree on 47 of 48 buildings (the other differs by one ground-floor tree, a sightline grazing a building corner); on three Cambridge output areas (312 buildings) they agree on `meets_3` for 99.7 % of buildings, with the raster engine seeing 2.5 % fewer trees on average, at ~1 s per area against ~50 s.
 
-Building heights come from the `Heights` chain (built on the first Visibility run when missing) and tree heights from `tree_height_col`.
+Building heights come from the `Heights` chain (built on the first Visibility run when missing) and tree heights from `tree_height_col`. Visibility needs crowns in `data.trees_dir`, and by default reads terrain from Earth Engine (below): set `terrain.source: null` for flat ground without GEE.
 
 **Terrain.** The raster engine stands everything on the ground: buildings sit flat at the ground under their representative point plus their height, vegetation on the ground, windows and targets on the ground under them (floors stay relative to it), and the bare ground itself — a hill, a ridge — blocks sightlines. The ground comes from `terrain.source`:
 
@@ -314,7 +380,7 @@ Per unit it reports means — `tree_count_<b>m`, `canopy_cover` (area-weighted),
 
 Because the rule is a test every home should pass, Merge also evaluates it **per building** and writes `database/T3_30_300_buildings.parquet` with `meets_3`, `meets_30`, `meets_300` and `meets_3_30_300`. The per-unit table gains `pct_meets_3`, `pct_meets_30`, `pct_meets_300` and `pct_meets_3_30_300` (% of buildings passing):
 
-- **3** — at least 3 trees within `--rule_t3_buffer` metres (default `50`): counted by T3 (`--rule_t3_metric proximity`, the default) or visible from some floor (`--rule_t3_metric visibility`, needs Visibility at that buffer). Whenever both outputs exist the table keeps `meets_3_proximity` and `meets_3_visibility` beside `meets_3`, and the combined rule under each, `meets_3_30_300_proximity` and `meets_3_30_300_visibility` (with `pct_` of all four per unit), and the parquet's `greenpy_rule` metadata records which metric and columns the rule used
+- **3** — at least 3 trees within `--rule_t3_buffer` metres (default `50`): counted by T3 (`--rule_t3_metric proximity`, the default) or visible from some floor (`--rule_t3_metric visibility`, needs Visibility at that buffer). Whenever both outputs exist the table keeps `meets_3_proximity` and `meets_3_visibility` beside `meets_3`, and the combined rule under each, `meets_3_30_300_proximity` and `meets_3_30_300_visibility` (with `pct_` of all four per unit), and the parquet's `verdance_rule` metadata records which metric and columns the rule used
 - **30** — canopy cover of the building's sub-geo unit (the neighbourhood reading of the rule) is ≥ 30 %; with `--rule_t30_buffer N`, T30_buildings canopy within N metres of the building instead
 - **300** — distance to the nearest park is ≤ 300 m, straight-line by default (`--rule_distance euclidean`, as in the WHO guideline) or `network`
 
@@ -326,10 +392,10 @@ Each building belongs to exactly one census unit — the one containing its repr
 
 ## Visualising results
 
-`greenpy viz` opens an interactive map of whatever has been computed so far:
+`verdance viz` opens an interactive map of whatever has been computed so far:
 
 ```bash
-greenpy viz -c config.yaml            # opens http://localhost:8765
+verdance viz -c config.yaml            # opens http://localhost:8765
 ```
 
 All controls sit in a sidebar on the left, split into **Map** (basemap, parks, trees, boundary lines), **Buildings** (one value per footprint) and **Areas** (one value per census unit or grid cell); a card in the top-right corner summarises the whole study area — buildings, trees, parks counted, canopy cover of the whole study area (total canopy ÷ total measured area, from T30), medians of the rule's inputs and the share of buildings meeting 3, 30, 300 and all three. When Merge kept both "3" metrics, the card shows the rule with 3 = trees nearby and with 3 = trees in view, the one `--rule_t3_metric` chose first.
@@ -343,7 +409,7 @@ All controls sit in a sidebar on the left, split into **Map** (basemap, parks, t
 
 Merge is optional: module CSVs are read directly when its parquets are missing. The first start builds `database/viz.duckdb` (geometry reprojected and indexed, statistics precomputed), and later starts reuse it until an output changes; `--rebuild` forces a rebuild and `--no-trees` skips the tree layer. Buildings and trees appear from zoom 14 (a view about 3.5 km across), which keeps whole-city datasets responsive; zoomed further out, show units instead.
 
-The server listens on `127.0.0.1` only. On a remote machine, forward the port (`ssh -L 8765:localhost:8765 host`) and pass `--no-browser`. DuckDB downloads its spatial extension on first use; set `GREENPY_DUCKDB_EXTENSIONS=/some/dir` if your home directory is full or read-only.
+The server listens on `127.0.0.1` only. On a remote machine, forward the port (`ssh -L 8765:localhost:8765 host`) and pass `--no-browser`. DuckDB downloads its spatial extension on first use; set `VERDANCE_DUCKDB_EXTENSIONS=/some/dir` if your home directory is full or read-only.
 
 ## Output layout
 
@@ -356,12 +422,55 @@ The server listens on `127.0.0.1` only. On a remote machine, forward the port (`
 ├── Tree_count/    Tree_count_<code>.csv
 ├── Visibility/    Visibility_<code>_<buffer>m.csv (Visibility_vector/ with --vis_engine vector)
 ├── Spectral/      Spectral_<code>.csv
+├── logs/          <module>_processing.log, viz.log
 ├── T30_h3_9/, Tree_count_h3_9/   same, per grid cell (runs with --dggs h3 --dggs_resolution 9)
 └── database/      parquet cache + consolidated outputs
+    ├── chm_cache/                   ← download cache (unless data.chm_cache_dir or VERDANCE_CACHE_DIR is set)
     ├── building_heights_<key>.parquet ← one height per building (Heights; per-source caches in heights/)
     ├── context_buildings.parquet    ← footprints in the context_buffer ring (remote building sources)
     ├── T3_30_300_buildings.parquet  ← per-building 3-30-300 evaluation
     ├── T3_30_300_spectral.parquet   ← final merged table
     ├── h3_boundaries_res9.parquet   ← grid cells (+ T3_30_300_*_h3_9.parquet from a grid Merge)
-    └── viz.duckdb                   ← map store built by `greenpy viz`
+    └── viz.duckdb                   ← map store built by `verdance viz`
 ```
+
+## Troubleshooting
+
+- **`UnsupportedClassVersionError`, or Spark fails to start** — the Java on `PATH` / in `JAVA_HOME` is too old (< 11) or too new (> 17). Point `JAVA_HOME` at a Java 17.
+- **`Overpass server busy (HTTP 502)` warnings** — the public OpenStreetMap API is overloaded; verdance retries with growing waits (up to ~15 min). Responses that did arrive are cached, so rerunning later resumes.
+- **The JVM runs out of memory (`OutOfMemoryError`, `Java heap space`)** — raise `SPARK_DRIVER_MEMORY`, or process fewer units at once (drop `--parallel`, or a coarser `--geo_level`).
+- **Results ignore changed inputs or column mappings** — the parquet cache is reused; delete `<output.base_dir>/database/`.
+- **`Missing consolidated outputs for: [...]`** from Merge — run the listed modules first, with the same `--dggs` options (a grid Merge needs T30 and Tree_count at that grid).
+- **Home directory full** — move the caches with `VERDANCE_CACHE_DIR`, `VERDANCE_IVY_DIR`, `VERDANCE_DUCKDB_EXTENSIONS` and `TMPDIR` (see [Where files go](#where-files-go-caches-temporary-files-and-logs)).
+
+## Development
+
+```bash
+git clone https://github.com/sdgresearch/verdance.git && cd verdance
+uv sync                                   # project environment in .venv, with the dev tools
+uv run pytest                             # ~240 tests, about a minute and a half (Spark tests need Java)
+```
+
+`uv sync` installs into `.venv` in the repository; to use an environment elsewhere, activate it and pass `--active` (`uv sync --active`, `uv add --active <package>`).
+
+**End-to-end check.** [`scripts/make_synthetic_city.py`](https://github.com/sdgresearch/verdance/blob/master/scripts/make_synthetic_city.py) writes a small synthetic city (48 buildings, trees, parks, roads, a CHM and two census levels) and a config for it, so every module can run in a few minutes without downloads:
+
+```bash
+python scripts/make_synthetic_city.py /tmp/verdance_synth
+verdance run -c /tmp/verdance_synth/config.yaml -p T3 --buffer 50   # likewise T30, T300, Tree_count, Visibility, ...
+verdance run -c /tmp/verdance_synth/config.yaml -p Merge --t3_buffers 50
+```
+
+The other scripts in `scripts/` prepare inputs for particular cities and evaluate tree segmentation and building heights against reference data.
+
+**Releasing.** Bump `__version__` in `src/verdance/__init__.py`, then build from a clean checkout (the sdist lists its files explicitly, but a clean tree avoids surprises) and check before uploading:
+
+```bash
+rm -rf dist && uv build                   # dist/verdance-<version>.tar.gz and .whl
+uvx twine check --strict dist/*
+uvx twine upload dist/*                   # or: uv publish
+```
+
+## Licence and data
+
+verdance is released under the [MIT licence](https://github.com/sdgresearch/verdance/blob/master/LICENSE). The data it downloads keeps its own licence — notably GlobalBuildingAtlas heights (`gba`) are CC BY-NC 4.0 and FABDEM terrain is CC BY-NC-SA 4.0, both non-commercial only; the tables above list each source's licence. The bundled map viewer includes [MapLibre GL JS](https://maplibre.org/) (BSD-3-Clause).

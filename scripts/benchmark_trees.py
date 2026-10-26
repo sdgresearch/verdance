@@ -1,4 +1,4 @@
-"""Benchmark greenpy tree segmentation against the legacy lidR VOM trees.
+"""Benchmark verdance tree segmentation against the legacy lidR VOM trees.
 
 For each VOM tile with a legacy VOM_trees_<tile>_<year>.gpkg (chm_processing.R
 output), runs the legacy_vom preset as one block (so the window cap is the
@@ -26,7 +26,7 @@ import pandas as pd
 import rasterio
 from rasterio.features import rasterize
 
-from greenpy.optional.tree_segmentation import get_params, segment_raster
+from verdance.optional.tree_segmentation import get_params, segment_raster
 
 VOM_DIR = Path("/maps/acz25/phd-thesis-data/input/Defra/VOM/unzipped_tiles")
 LIDR_DIR = Path("/maps/acz25/phd-thesis-data/output/3-30-300/VOM_Trees")
@@ -95,7 +95,7 @@ def main():
         row = {"tile": tile, "single_block_s": round(single_s, 1), **compare(ours, lidr, chm)}
         with rasterio.open(chm) as src:
             # blocked runs share one cap; pass the tile p95 so they are comparable to the single block
-            from greenpy.optional.tree_segmentation import smooth_chm, window_cap
+            from verdance.optional.tree_segmentation import smooth_chm, window_cap
             cap = window_cap(smooth_chm(src.read(1).astype(np.float32), 1, 1, p), p)
         for w in args.workers:
             t = time.time()

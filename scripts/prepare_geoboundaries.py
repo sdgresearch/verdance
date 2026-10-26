@@ -1,4 +1,4 @@
-"""Build a nested census-boundaries file for greenpy from geoBoundaries (gbOpen).
+"""Build a nested census-boundaries file for verdance from geoBoundaries (gbOpen).
 
 Downloads ADM1..ADMn for a country, keeps the finest units inside one ADM1
 unit, and gives each finest unit the codes and names of its parents (taken

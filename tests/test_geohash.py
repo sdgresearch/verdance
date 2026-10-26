@@ -1,7 +1,7 @@
 from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
-from greenpy.dggs.geohash import GeohashSystem, cell_size, geohash_encode
+from verdance.dggs.geohash import GeohashSystem, cell_size, geohash_encode
 
 
 def test_encode_known_vectors():

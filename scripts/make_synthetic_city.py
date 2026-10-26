@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate a tiny synthetic city for end-to-end smoke-testing greenpy.
+Generate a tiny synthetic city for end-to-end smoke-testing verdance.
 
 Creates buildings, trees, parks, roads and a 2-level census hierarchy
 (2x2 districts of 2x2 tracts, 200 m tracts) plus a matching YAML config.
@@ -200,4 +200,4 @@ terrain: null
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/greenpy_synth"))
+    main(Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/verdance_synth"))
