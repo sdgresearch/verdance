@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from greenpy.optional.tree_eval import box_scores, match_points, point_scores
+from verdance.optional.tree_eval import box_scores, match_points, point_scores
 
 
 def test_matching_is_one_to_one_nearest_first():

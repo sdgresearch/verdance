@@ -8,10 +8,10 @@ the container starts fast and works with no network at runtime.
 Uses the real `get_spark()` so the cached jars exactly match what runtime asks
 for. Keep the driver/executor memory small at build time via the
 SPARK_DRIVER_MEMORY / SPARK_EXECUTOR_MEMORY env vars (set in the Dockerfile).
-Also installs DuckDB's spatial extension for `greenpy viz`.
+Also installs DuckDB's spatial extension for `verdance viz`.
 """
 
-from greenpy.utils.sedona_config import get_spark
+from verdance.utils.sedona_config import get_spark
 
 
 def main() -> None:
@@ -20,10 +20,11 @@ def main() -> None:
     sedona.stop()
     print("JAR warm-up complete.")
 
-    # `greenpy viz` needs DuckDB's spatial extension, which is otherwise downloaded on first use
-    import duckdb
+    # `verdance viz` needs DuckDB's spatial extension, which is otherwise downloaded on first use;
+    # connect() installs it into $VERDANCE_DUCKDB_EXTENSIONS
+    from verdance.viz.store import connect
 
-    duckdb.connect().execute("INSTALL spatial")
+    connect(":memory:").close()
     print("DuckDB spatial extension installed.")
 
 

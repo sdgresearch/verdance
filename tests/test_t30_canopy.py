@@ -7,7 +7,7 @@ import rioxarray  # noqa: F401 — registers the .rio accessor
 import xarray as xr
 from shapely.geometry import Point, box
 
-from greenpy.t30 import get_canopy_cover_raster, get_canopy_cover_vector
+from verdance.t30 import get_canopy_cover_raster, get_canopy_cover_vector
 
 CRS = "EPSG:27700"
 

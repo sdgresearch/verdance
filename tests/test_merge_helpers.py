@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 
-from greenpy.merge import _buffers_in, evaluate_rule, summarise_rule
+from verdance.merge import _buffers_in, evaluate_rule, summarise_rule
 
 
 def test_buffers_in_parses_radii_without_collisions(tmp_path):

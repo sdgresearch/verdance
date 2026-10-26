@@ -5,8 +5,8 @@ import pytest
 import yaml
 from shapely.geometry import LineString, box
 
-from greenpy.config.loader import load_config
-from greenpy.overture import select_parks
+from verdance.config.loader import load_config
+from verdance.overture import select_parks
 
 
 def _land_use():

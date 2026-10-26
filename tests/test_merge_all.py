@@ -1,23 +1,25 @@
 """Merge's unit table: every unit with canopy, trees or buildings gets a row (local Spark, no Sedona)."""
 
 import os
+import sys
 
 import pandas as pd
 import pytest
 
 pyspark = pytest.importorskip("pyspark")
 
-from greenpy.merge import fill_unit_counts, merge_all
+from verdance.merge import fill_unit_counts, merge_all
 
 
 @pytest.fixture(scope="module")
 def spark():
-    from greenpy.utils.constants import JAVA_HOME
+    from verdance.utils.constants import JAVA_HOME
     from pyspark.sql import SparkSession
 
     if JAVA_HOME:
         os.environ["JAVA_HOME"] = JAVA_HOME
-    s = (SparkSession.builder.master("local[1]").appName("greenpy-merge-test")
+    os.environ.setdefault("PYSPARK_PYTHON", sys.executable)  # as get_spark does
+    s = (SparkSession.builder.master("local[1]").appName("verdance-merge-test")
          .config("spark.ui.enabled", "false").config("spark.sql.shuffle.partitions", "1").getOrCreate())
     yield s
     s.stop()
@@ -65,15 +67,15 @@ def _compliance_views(spark, with_visibility=True):
 
 
 def _cfg(tmp_path):
-    from greenpy.config.schema import ColumnMapping, DataPaths, GreenPyConfig, OutputPaths
+    from verdance.config.schema import ColumnMapping, DataPaths, VerdanceConfig, OutputPaths
     (tmp_path / "database").mkdir(exist_ok=True)
-    return GreenPyConfig(study_area_name="t", crs="EPSG:32632", data=DataPaths("b", "p", "a", "r", "c"),
+    return VerdanceConfig(study_area_name="t", crs="EPSG:32632", data=DataPaths("b", "p", "a", "r", "c"),
                          columns=ColumnMapping(geo_levels=["unit"]), output=OutputPaths(str(tmp_path)))
 
 
 @pytest.mark.parametrize("metric, expected", [("proximity", [True, True, False]), ("visibility", [True, False, False])])
 def test_compliance_rule_t3_metric(spark, tmp_path, metric, expected):
-    from greenpy.merge import compute_compliance, read_rule_metadata
+    from verdance.merge import compute_compliance, read_rule_metadata
 
     _compliance_views(spark)
     compute_compliance(spark, _cfg(tmp_path), "unit", "unit", [50], [], rule_t3_buffer=50,
@@ -95,7 +97,7 @@ def test_compliance_rule_t3_metric(spark, tmp_path, metric, expected):
 
 
 def test_compliance_visibility_requires_output(spark, tmp_path):
-    from greenpy.merge import compute_compliance
+    from verdance.merge import compute_compliance
 
     _compliance_views(spark, with_visibility=False)
     with pytest.raises(FileNotFoundError, match="Visibility"):
@@ -104,7 +106,7 @@ def test_compliance_visibility_requires_output(spark, tmp_path):
 
 
 def test_aggregate_visibility_share_in_view(spark):
-    from greenpy.merge import aggregate_visibility
+    from verdance.merge import aggregate_visibility
 
     _view(spark, "boundaries_buildings_overlay", pd.DataFrame({"building_id": ["a", "b", "c"], "unit": ["U", "U", "V"]}))
     _view(spark, "visibility_50m", pd.DataFrame({

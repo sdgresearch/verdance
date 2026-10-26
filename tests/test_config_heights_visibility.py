@@ -1,8 +1,8 @@
 import pytest
 import yaml
 
-from greenpy.config.loader import load_config
-from greenpy.config.schema import HeightSourceSpec
+from verdance.config.loader import load_config
+from verdance.config.schema import HeightSourceSpec
 
 from test_config_dggs import MINIMAL
 

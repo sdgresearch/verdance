@@ -10,10 +10,10 @@ import rasterio
 import yaml
 from shapely.geometry import box
 
-from greenpy.config.loader import load_config
-from greenpy.optional.chm_sources import build_vrt, chm_mosaic, quadkeys_for_bounds, raster_index, tiles_for_boundary
-from greenpy.optional.tree_segmentation import process_geo_code, segment_raster, get_params
-from greenpy.utils.data_processing import load_trees_gdf
+from verdance.config.loader import load_config
+from verdance.optional.chm_sources import build_vrt, chm_mosaic, quadkeys_for_bounds, raster_index, tiles_for_boundary
+from verdance.optional.tree_segmentation import process_geo_code, segment_raster, get_params
+from verdance.utils.data_processing import load_trees_gdf
 from test_tree_segmentation import _random_forest, write_tif
 
 CRS = "EPSG:27700"
@@ -55,7 +55,7 @@ def test_max_overlap_takes_per_pixel_maximum(tmp_path):
     with rasterio.open(latest[0]) as src:
         z = src.read(1)
         assert z[2, 2] == 0 and z[7, 7] == 5  # the 2020 tile hides the 2018 tree
-    from greenpy.optional.tree_segmentation import _read_layers
+    from verdance.optional.tree_segmentation import _read_layers
     from rasterio.windows import Window
     z = _read_layers([str(p) for p in layers], Window(0, 0, 20, 10))
     assert z.shape == (10, 20) and z[2, 2] == 9 and z[7, 7] == 5 and (z[:, 10:] == 1).all()
@@ -70,7 +70,7 @@ def test_vrt_rejects_mixed_resolution(tmp_path):
 
 def test_vom_hillshades_never_read_as_chm(tmp_path):
     """T30/T30_buildings and Trees skip VOM_HS_ hillshades even with the default *.tif pattern."""
-    from greenpy.utils.data_processing import find_overlapping_rasters
+    from verdance.utils.data_processing import find_overlapping_rasters
     tiles = tmp_path / "tiles" / "2019"
     tiles.mkdir(parents=True)
     write_tif(tiles / "VOM_TL0000_P_1_2019.tif", np.zeros((10, 10), np.float32))
@@ -150,7 +150,7 @@ def _two_years(tmp_path):
 
 @pytest.mark.parametrize("overlap,expected", [("latest", (0, 1)), ("max", (1, 1))])
 def test_t30_binarise_follows_overlap(tmp_path, overlap, expected):
-    from greenpy.t30 import binarise_tiles
+    from verdance.t30 import binarise_tiles
     paths = _two_years(tmp_path)
     binary = binarise_tiles(list(reversed(paths)), 3, 60, overlap=overlap)[0].values  # input order must not matter
     assert binary.shape == (10, 20)
@@ -159,7 +159,7 @@ def test_t30_binarise_follows_overlap(tmp_path, overlap, expected):
 
 
 def test_resolve_overlap_passes_disjoint_tiles_through(tmp_path):
-    from greenpy.optional.chm_sources import resolve_overlap
+    from verdance.optional.chm_sources import resolve_overlap
     paths = _two_years(tmp_path)
     disjoint = [paths[1], paths[2]]
     assert resolve_overlap(disjoint, "max", tmp_path / "comp") == sorted(disjoint)
@@ -167,7 +167,7 @@ def test_resolve_overlap_passes_disjoint_tiles_through(tmp_path):
 
 @pytest.mark.parametrize("overlap,expected", [("latest", (0, 5)), ("max", (9, 5))])
 def test_resolve_overlap_composites_without_overlaps(tmp_path, overlap, expected):
-    from greenpy.optional.chm_sources import resolve_overlap, _non_overlapping_layers
+    from verdance.optional.chm_sources import resolve_overlap, _non_overlapping_layers
     chunks = resolve_overlap(_two_years(tmp_path), overlap, tmp_path / "comp", chunk=8)
     assert len(_non_overlapping_layers(chunks)) == 1  # safe to sum per tile
     vrt = build_vrt(chunks, tmp_path / "check.vrt")
@@ -209,7 +209,7 @@ def test_ensure_tiled_rewrites_strips_keeping_pixels(tmp_path):
     import rasterio
     from rasterio.transform import from_origin
 
-    from greenpy.optional.chm_sources import ensure_tiled
+    from verdance.optional.chm_sources import ensure_tiled
 
     path = tmp_path / "strips.tif"
     arr = (np.arange(2048 * 1024) % 251).reshape(1024, 2048).astype("uint8")

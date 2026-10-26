@@ -17,6 +17,7 @@ data/
 *.qgz
 *.out
 *.sh
+!docker/entrypoint.sh
 /images
 /logs
 .python-version
@@ -24,3 +25,13 @@ data/
 
 *.pyc
 cache/
+
+# build artefacts and Spark/pytest leftovers
+dist/
+build/
+*.egg-info/
+spark-warehouse/
+metastore_db/
+derby.log
+.pytest_cache/
+__pycache__/

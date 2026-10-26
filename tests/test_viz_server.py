@@ -9,10 +9,10 @@ import pytest
 
 pytest.importorskip("duckdb")
 
-from greenpy.viz.catalog import build_catalog
-from greenpy.viz.server import make_handler
-from greenpy.viz.store import connect, ensure_store, read_meta
-from greenpy.viz.tiles import TileStore
+from verdance.viz.catalog import build_catalog
+from verdance.viz.server import make_handler
+from verdance.viz.store import connect, ensure_store, read_meta
+from verdance.viz.tiles import TileStore
 
 from test_viz_store import _tile_xy
 from viz_fixtures import make_config, make_outputs, make_trees

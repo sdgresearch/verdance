@@ -24,7 +24,7 @@ data:
 
   # Tree polygons: a single vector/parquet file, or a directory of .gpkg /
   # .parquet tiles (only tiles whose extent overlaps the area being processed
-  # are read). `greenpy run -p Trees` fills this directory by segmenting a CHM
+  # are read). `verdance run -p Trees` fills this directory by segmenting a CHM
   # (see tree_segmentation below). Set to null if you are providing
   # chm_tiles_dir instead.
   trees_dir: /path/to/trees/
@@ -44,9 +44,9 @@ data:
   # Always a file — this defines the study area, including for OSM queries.
   census_boundaries: /path/to/census_tracts.gpkg
 
-  # Directory of CHM (Canopy Height Model) raster tiles (.tif).
-  # Set to null to compute T30/T30_buildings from tree polygon areas instead.
-  # Tiles must not overlap (T30_buildings sums pixel counts across tiles).
+  # Directory of CHM (Canopy Height Model) raster tiles (.tif) for T30 and
+  # T30_buildings. Set to null to use meta_chm, canopy_height_ee_path or the
+  # tree polygons instead (see "Canopy source priority" below).
   chm_tiles_dir: null
 
   # Glob for the CHM tiles under chm_tiles_dir (searched recursively; T30,
@@ -61,16 +61,22 @@ data:
   chm_overlap: latest
 
   # Downloaded Meta tiles, raster indexes, VRTs and overlap composites;
-  # null = $GREENPY_CACHE_DIR, else <output.base_dir>/database/chm_cache
+  # null = $VERDANCE_CACHE_DIR, else <output.base_dir>/database/chm_cache
   chm_cache_dir: null
+
+  # Meta/WRI global canopy height model downloaded from AWS (no account
+  # needed): v1 (Tolan et al. 2024) or v2. Canopy source for T30 and
+  # T30_buildings, and the release read wherever the "meta" CHM is used
+  # (tree_segmentation.source: meta, raster Visibility; default v1 there).
+  meta_chm: null
 
   # Google Earth Engine canopy-height asset for T30/T30_buildings (requires
   # gee_project below).
   # Binarised server-side and downloaded with xee; no local canopy data needed.
-  # Example (global 1 m Meta dataset):
+  # Example (global 1 m Meta dataset, the same data as meta_chm: v1):
   #   projects/sat-io/open-datasets/facebook/meta-canopy-height
-  # Source priority for T30 and T30_buildings:
-  #   chm_tiles_dir > canopy_height_ee_path > trees_dir.
+  # Canopy source priority for T30 and T30_buildings:
+  #   chm_tiles_dir > meta_chm > canopy_height_ee_path > trees_dir.
   canopy_height_ee_path: null
 
 columns:
@@ -120,7 +126,7 @@ columns:
     - district_code
     - tract_code
 
-  # Optional, for `greenpy viz`: display names for the levels, and the
+  # Optional, for `verdance viz`: display names for the levels, and the
   # census_boundaries column holding each unit's name
   # geo_level_labels: {district_code: District, tract_code: Tract}
   # geo_level_names: {district_code: district_name, tract_code: tract_name}
@@ -145,8 +151,13 @@ output:
 # behind the 300 rule uses >= 0.5-1 ha. null keeps every park.
 park_min_area_ha: null
 
-# GEE configuration — only needed for the Spectral module
+# Google Earth Engine project, needed for: Spectral, canopy_height_ee_path,
+# data.buildings: open_buildings, the remote heights sources (gba, utglobus,
+# open_buildings_temporal, ghs_built_h) and terrain (fabdem, the default for
+# Visibility — set terrain.source: null to run Visibility without GEE).
+# Authenticate once with `earthengine authenticate`.
 gee_project: null
+# GEE table asset of the census boundaries — Spectral only
 gee_boundaries_asset: null
 
 # Aggregate to uniform DGGS cells instead of the finest geo level.
@@ -233,7 +244,8 @@ visibility:
 # Ground under buildings and trees for Visibility (raster engine): fabdem
 # (bare earth, CC BY-NC-SA 4.0 — the default), copernicus or nasadem (surface
 # models: they include rooftops and canopy, so heights get counted twice in
-# cities), a local DTM raster file/directory, or null for flat ground.
+# cities), a local DTM raster file/directory, or null for flat ground. The
+# GEE sources need gee_project.
 terrain:
   source: fabdem
   resolution: 30  # GEE download resolution (m)

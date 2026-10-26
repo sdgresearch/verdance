@@ -5,7 +5,7 @@ import rasterio
 import rioxarray  # noqa: F401  (registers .rio)
 import xarray as xr
 
-from greenpy.utils.gee import write_raster
+from verdance.utils.gee import write_raster
 
 
 def test_write_raster_ignores_xee_scale_factor(tmp_path):

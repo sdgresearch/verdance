@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare Booth buildings + OHM parks/roads (London 1880-1900) as greenpy inputs.
+"""Prepare Booth buildings + OHM parks/roads (London 1880-1900) as verdance inputs.
 
 Writes parquet inputs for examples/booth_london.yaml to
 /maps/acz25/phd-thesis-data/output/greenpy/Booth/input/:
@@ -19,7 +19,7 @@ import geopandas as gpd
 import shapely
 from loguru import logger
 
-from greenpy.osm import _extract_points, _thin_points
+from verdance.osm import _extract_points, _thin_points
 
 CRS = "EPSG:27700"
 BUILDINGS_GPKG = "/maps/acz25/phd-thesis-data/input/Booth_maps/Booth_buildings.gpkg"
@@ -39,7 +39,7 @@ def prepare_buildings() -> gpd.GeoDataFrame:
 def prepare_roads() -> gpd.GeoDataFrame:
     gdf = gpd.read_parquet(ROADS_PARQUET).to_crs(CRS)
     # Split ways at every intersection so junctions become segment endpoints;
-    # greenpy derives the road graph nodes from segment endpoints only.
+    # verdance derives the road graph nodes from segment endpoints only.
     collection = shapely.GeometryCollection(list(gdf.geometry.values))
     try:
         noded = shapely.node(collection)
@@ -52,7 +52,7 @@ def prepare_roads() -> gpd.GeoDataFrame:
     segments = segments[segments.geometry.geom_type == "LineString"].reset_index(drop=True)
 
     # Keep only the largest connected component (endpoints matched the same way
-    # greenpy derives nodes: rounded to 0.1 m) so every building snaps to a
+    # verdance derives nodes: rounded to 0.1 m) so every building snaps to a
     # routable network instead of an isolated fragment.
     import networkx as nx
 

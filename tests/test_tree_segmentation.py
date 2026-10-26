@@ -7,7 +7,7 @@ import pytest
 import rasterio
 from rasterio.transform import from_origin
 
-from greenpy.optional.tree_segmentation import (
+from verdance.optional.tree_segmentation import (
     PRESETS,
     SegmentationParams,
     dalponte2016,

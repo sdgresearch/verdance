@@ -1,31 +1,37 @@
-# Convenience wiring for running greenpy in Docker.
+# Convenience wiring for running verdance in Docker.
 #
 #   docker compose build
-#   docker compose run --rm greenpy run -c /config/city.yaml -p T3 --buffer 100
+#   docker compose run --rm verdance run -c /config/city.yaml -p T3 --buffer 50
+#   docker compose run --rm --service-ports verdance viz -c /config/city.yaml --host 0.0.0.0 --no-browser
 #
-# The `greenpy` entrypoint is inherited from the image, so the command you pass
+# The `verdance` entrypoint is inherited from the image, so the command you pass
 # to `docker compose run` is the CLI arguments (e.g. `run -c ... -p T30`).
+# Reference the container paths below inside the YAML config, e.g.
+# `census_boundaries: /data/wards.gpkg` and `output.base_dir: /output`.
 services:
-  greenpy:
+  verdance:
     build:
       context: .
       dockerfile: Dockerfile
-    image: greenpy:latest
+    image: verdance:latest
+    # Write files as your host user (uncomment and set UID/GID, e.g. `UID=$(id -u) GID=$(id -g) docker compose ...`)
+    # user: "${UID}:${GID}"
     volumes:
-      # Your input data — reference these container paths inside the YAML config.
+      # Your input data.
       - ./data:/data
       # YAML config file(s).
       - ./config:/config
-      # Writable working dir: outputs, logs/, spark-warehouse/, cache/.
-      - ./output:/work
-      # Uncomment for the optional GEE features (Spectral / GEE canopy /
-      # open_buildings). Authenticate once on the host with `earthengine
-      # authenticate`, then mount the credentials read-only:
-      # - ${HOME}/.config/earthengine:/home/greenpy/.config/earthengine:ro
+      # Outputs: point output.base_dir here.
+      - ./output:/output
+      # Download cache shared between runs (CHM tiles, Earth Engine rasters, OSM).
+      - ./cache:/cache
+      # Uncomment for the Earth Engine features (Spectral, GEE canopy, open_buildings,
+      # remote heights, terrain). Authenticate once on the host with
+      # `earthengine authenticate`, then mount the credentials read-only:
+      # - ${HOME}/.config/earthengine:/home/verdance/.config/earthengine:ro
+    ports:
+      - "8765:8765"   # verdance viz (with --host 0.0.0.0)
     environment:
-      DATA_DIR: /data
-      # Only needed for the optional GEE features.
-      # GEE_PROJECT_NAME: my-gee-project
-      # Spark heap — raise these if you have the RAM.
+      VERDANCE_CACHE_DIR: /cache
+      # Spark heap — raise it if you have the RAM.
       SPARK_DRIVER_MEMORY: 4g
-      SPARK_EXECUTOR_MEMORY: 2g

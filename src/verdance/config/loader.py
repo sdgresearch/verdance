@@ -1,0 +1,433 @@
+from pathlib import Path
+
+import yaml
+from loguru import logger
+
+from .schema import (
+    VerdanceConfig,
+    ColumnMapping,
+    DataPaths,
+    HeightSourceSpec,
+    HeightsConfig,
+    OSMConfig,
+    OpenBuildingsConfig,
+    OvertureConfig,
+    OutputPaths,
+    TileSystemConfig,
+    TerrainConfig,
+    TreeSegmentationConfig,
+    VisibilityConfig,
+    building_source,
+    is_open_buildings,
+    is_osm,
+    is_overture,
+)
+
+# osmnx 2.x network types
+VALID_NETWORK_TYPES = {"walk", "bike", "drive", "drive_service", "all", "all_public"}
+
+
+def load_config(path: str | Path) -> VerdanceConfig:
+    with open(path) as f:
+        raw = yaml.safe_load(f)
+
+    _require(raw, "study_area_name", "crs", "data", "columns", "output")
+
+    data_raw = raw["data"]
+    _require_section(data_raw, "data", "buildings", "parks_sites", "parks_access", "roads", "census_boundaries")
+
+    columns_raw = raw["columns"]
+    _require_section(columns_raw, "columns", "geo_levels")
+    if not columns_raw.get("geo_levels"):
+        raise ValueError("columns.geo_levels must be a non-empty list")
+    if building_source(data_raw["buildings"]) is None and not columns_raw.get("building_id"):
+        raise ValueError("columns.building_id is required when data.buildings is a file path")
+
+    _validate_osm_sources(data_raw, columns_raw)
+    osm_cfg = _parse_osm_section(raw.get("osm") or {})
+    open_buildings_cfg = _parse_open_buildings_section(raw.get("open_buildings") or {})
+    overture_cfg = _parse_overture_section(raw.get("overture") or {})
+    tree_seg_cfg = _parse_tree_segmentation_section(raw.get("tree_segmentation") or {})
+    heights_cfg = _parse_heights_section(raw.get("heights") or {})
+    visibility_cfg = _parse_visibility_section(raw.get("visibility") or {})
+    terrain_cfg = _parse_terrain_section(raw["terrain"] if "terrain" in raw else {})
+    context_buffer = raw.get("context_buffer", 100.0)
+    if isinstance(context_buffer, bool) or not isinstance(context_buffer, (int, float)) or context_buffer < 0:
+        raise ValueError(f"context_buffer must be a non-negative number (metres), got {context_buffer!r}")
+
+    output_raw = raw["output"]
+    _require_section(output_raw, "output", "base_dir")
+
+    tile_raw = raw.get("tile_system", {})
+
+    try:
+        from pyproj import CRS
+        CRS.from_user_input(raw["crs"])
+    except Exception as e:
+        raise ValueError(f"Invalid CRS '{raw['crs']}': {e}")
+
+    dggs, dggs_resolution = _parse_dggs(raw)
+
+    return VerdanceConfig(
+        study_area_name=raw["study_area_name"],
+        crs=raw["crs"],
+        data=DataPaths(
+            buildings=data_raw["buildings"],
+            parks_sites=data_raw["parks_sites"],
+            parks_access=data_raw["parks_access"],
+            roads=data_raw["roads"],
+            census_boundaries=data_raw["census_boundaries"],
+            road_nodes=data_raw.get("road_nodes"),
+            trees_dir=data_raw.get("trees_dir"),
+            chm_tiles_dir=data_raw.get("chm_tiles_dir"),
+            chm_pattern=data_raw.get("chm_pattern") or "*.tif",
+            chm_overlap=_parse_chm_overlap(data_raw.get("chm_overlap")),
+            chm_cache_dir=data_raw.get("chm_cache_dir"),
+            canopy_height_ee_path=data_raw.get("canopy_height_ee_path"),
+            meta_chm=_parse_meta_chm(data_raw.get("meta_chm")),
+        ),
+        columns=ColumnMapping(
+            building_id=columns_raw.get("building_id"),
+            building_layer=columns_raw.get("building_layer"),
+            building_height_col=columns_raw.get("building_height_col"),
+            building_use_col=columns_raw.get("building_use_col"),
+            building_use_value=columns_raw.get("building_use_value"),
+            road_node_id=columns_raw.get("road_node_id", "id"),
+            road_edge_start=columns_raw.get("road_edge_start", "start_node"),
+            road_edge_end=columns_raw.get("road_edge_end", "end_node"),
+            road_edge_length=columns_raw.get("road_edge_length", "length"),
+            road_edge_layer=columns_raw.get("road_edge_layer", "road_link"),
+            road_node_layer=columns_raw.get("road_node_layer", "road_node"),
+            park_id=columns_raw.get("park_id", "id"),
+            park_function_col=columns_raw.get("park_function_col"),
+            park_function_value=columns_raw.get("park_function_value"),
+            park_access_ref_col=columns_raw.get("park_access_ref_col"),
+            tree_height_col=columns_raw.get("tree_height_col", "height"),
+            tree_area_col=columns_raw.get("tree_area_col", "area"),
+            tree_id_col=columns_raw.get("tree_id_col", "treeID"),
+            tree_layer=columns_raw.get("tree_layer", "trees"),
+            geo_levels=columns_raw["geo_levels"],
+            geo_level_labels=_level_mapping(columns_raw, "geo_level_labels"),
+            geo_level_names=_level_mapping(columns_raw, "geo_level_names"),
+        ),
+        output=OutputPaths(base_dir=output_raw["base_dir"]),
+        gee_project=raw.get("gee_project"),
+        gee_boundaries_asset=raw.get("gee_boundaries_asset"),
+        park_min_area_ha=_parse_park_min_area(raw.get("park_min_area_ha")),
+        dggs=dggs,
+        dggs_resolution=dggs_resolution,
+        tile_system=TileSystemConfig(
+            enabled=tile_raw.get("enabled", False),
+            tile_name_pattern=tile_raw.get("tile_name_pattern"),
+        ),
+        osm=osm_cfg,
+        overture=overture_cfg,
+        open_buildings=open_buildings_cfg,
+        tree_segmentation=tree_seg_cfg,
+        heights=heights_cfg,
+        visibility=visibility_cfg,
+        terrain=terrain_cfg,
+        context_buffer=float(context_buffer),
+    )
+
+
+def _parse_meta_chm(value) -> str | None:
+    from ..optional.chm_sources import META_VERSIONS
+
+    if value is None:
+        return None
+    value = str(value).strip().lower()
+    if value not in META_VERSIONS:
+        raise ValueError(f"data.meta_chm must be one of {sorted(META_VERSIONS)}, got {value!r}")
+    return value
+
+
+def _parse_park_min_area(value) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError(f"park_min_area_ha must be a non-negative number (hectares), got {value!r}")
+    return float(value)
+
+
+def _parse_dggs(raw: dict) -> tuple[str | None, int | None]:
+    """Normalize the DGGS options, mapping the deprecated h3_resolution onto them."""
+    from ..dggs import RESOLUTION_RANGES, SYSTEM_NAMES
+
+    dggs = raw.get("dggs")
+    dggs_resolution = raw.get("dggs_resolution")
+    h3_resolution = raw.get("h3_resolution")
+
+    if h3_resolution is not None:
+        if dggs is not None or dggs_resolution is not None:
+            raise ValueError("h3_resolution cannot be combined with dggs/dggs_resolution — use only the latter")
+        logger.warning("h3_resolution is deprecated; use dggs: h3 with dggs_resolution instead")
+        dggs, dggs_resolution = "h3", h3_resolution
+
+    if (dggs is None) != (dggs_resolution is None):
+        raise ValueError("dggs and dggs_resolution must be provided together")
+    if dggs is None:
+        return None, None
+
+    if dggs not in SYSTEM_NAMES:
+        raise ValueError(f"dggs must be one of {SYSTEM_NAMES}, got {dggs!r}")
+    lo, hi = RESOLUTION_RANGES[dggs]
+    if not (isinstance(dggs_resolution, int) and lo <= dggs_resolution <= hi):
+        raise ValueError(f"dggs_resolution for {dggs} must be an integer between {lo} and {hi}, got {dggs_resolution!r}")
+    return dggs, dggs_resolution
+
+
+def _validate_osm_sources(data_raw: dict, columns_raw: dict) -> None:
+    """Check remote-sourced layers are consistent with the rest of the config."""
+    for layer in ("parks_sites", "parks_access", "roads", "road_nodes", "census_boundaries"):
+        val = data_raw.get(layer)
+        if not isinstance(val, str):
+            continue
+        source = val.strip().lower()
+        if source == "open_buildings" or (source == "overture" and layer != "parks_sites"):
+            raise ValueError(
+                f"data.{layer} cannot be '{val}' — 'open_buildings' is valid only for data.buildings, "
+                "'overture' only for data.buildings and data.parks_sites"
+            )
+    if is_open_buildings(data_raw["buildings"]) and columns_raw.get("building_height_col"):
+        logger.warning(
+            "Google Open Buildings has no height attribute — columns.building_height_col is ignored "
+            "with buildings: open_buildings"
+        )
+    if building_source(data_raw["buildings"]) is not None and columns_raw.get("building_use_col"):
+        logger.warning(
+            "columns.building_use_col is ignored for remote building sources — "
+            "restrict OSM buildings with osm.building_types instead"
+        )
+    if is_osm(data_raw["census_boundaries"]):
+        raise ValueError("data.census_boundaries cannot be 'osm' — it defines the study area and must be a file")
+    if is_osm(data_raw["roads"]) and data_raw.get("road_nodes"):
+        raise ValueError("data.road_nodes cannot be combined with roads: osm — nodes come from the OSM network")
+    if is_overture(data_raw["parks_sites"]):
+        if columns_raw.get("park_function_col") or columns_raw.get("park_function_value"):
+            raise ValueError(
+                "columns.park_function_col/value cannot be combined with parks_sites: overture — "
+                "Overture parks are already filtered by land use (see overture.park_land_use)"
+            )
+    if is_osm(data_raw["parks_sites"]):
+        if columns_raw.get("park_function_col") or columns_raw.get("park_function_value"):
+            raise ValueError(
+                "columns.park_function_col/value cannot be combined with parks_sites: osm — "
+                "OSM parks are already filtered by tags (see osm.park_tags)"
+            )
+        if not is_osm(data_raw["parks_access"]) and columns_raw.get("park_access_ref_col"):
+            logger.warning(
+                "parks_sites is 'osm' but parks_access is a file with park_access_ref_col set — "
+                "its references will not match OSM park ids, so all access points may be filtered out"
+            )
+
+
+def _parse_osm_section(osm_raw: dict) -> OSMConfig:
+    network_type = osm_raw.get("network_type", "walk")
+    if network_type not in VALID_NETWORK_TYPES:
+        raise ValueError(f"osm.network_type must be one of {sorted(VALID_NETWORK_TYPES)}, got {network_type!r}")
+
+    building_types = osm_raw.get("building_types")
+    if building_types is not None and not (isinstance(building_types, list) and all(isinstance(t, str) for t in building_types)):
+        raise ValueError("osm.building_types must be a list of strings (or 'all' as a list item)")
+
+    park_tags = osm_raw.get("park_tags")
+    if park_tags is not None and not isinstance(park_tags, dict):
+        raise ValueError("osm.park_tags must be a mapping of OSM key -> list of values")
+
+    fetch_buffer = osm_raw.get("fetch_buffer", 2000)
+    if not isinstance(fetch_buffer, int) or fetch_buffer < 0:
+        raise ValueError(f"osm.fetch_buffer must be a non-negative integer (metres), got {fetch_buffer!r}")
+
+    return OSMConfig(
+        network_type=network_type,
+        building_types=building_types,
+        park_tags=park_tags,
+        exclude_private=osm_raw.get("exclude_private", True),
+        fetch_buffer=fetch_buffer,
+    )
+
+
+def _parse_overture_section(ov_raw: dict) -> OvertureConfig:
+    unknown = set(ov_raw) - {"park_land_use"}
+    if unknown:
+        raise ValueError(f"Unknown overture keys {sorted(unknown)}; expected ['park_land_use']")
+    park_land_use = ov_raw.get("park_land_use", OvertureConfig().park_land_use)
+    if not (isinstance(park_land_use, list) and park_land_use and all(isinstance(v, str) for v in park_land_use)):
+        raise ValueError("overture.park_land_use must be a non-empty list of Overture land_use subtypes/classes")
+    return OvertureConfig(park_land_use=park_land_use)
+
+
+def _parse_open_buildings_section(ob_raw: dict) -> OpenBuildingsConfig:
+    confidence_threshold = ob_raw.get("confidence_threshold", 0.7)
+    if not isinstance(confidence_threshold, (int, float)) or not (0 <= confidence_threshold < 1):
+        raise ValueError(
+            f"open_buildings.confidence_threshold must be a number in [0, 1), got {confidence_threshold!r}"
+        )
+    return OpenBuildingsConfig(confidence_threshold=float(confidence_threshold))
+
+
+def _level_mapping(columns_raw: dict, key: str) -> dict[str, str]:
+    """A {geo_level: string} mapping from columns.<key>, checked against columns.geo_levels."""
+    value = columns_raw.get(key) or {}
+    if not isinstance(value, dict) or not all(isinstance(v, str) for v in value.values()):
+        raise ValueError(f"columns.{key} must map geo_levels to strings, e.g. {{ADM3_code: Ward}}")
+    unknown = set(value) - set(columns_raw["geo_levels"])
+    if unknown:
+        raise ValueError(f"columns.{key} has levels not in columns.geo_levels: {sorted(unknown)}")
+    return dict(value)
+
+
+def _parse_chm_overlap(value) -> str:
+    value = value or "latest"
+    if value not in ("latest", "max"):
+        raise ValueError(f"data.chm_overlap must be 'latest' or 'max', got {value!r}")
+    return value
+
+
+def _parse_tree_segmentation_section(ts_raw: dict) -> TreeSegmentationConfig:
+    from dataclasses import fields
+    from ..optional.tree_segmentation import PRESETS, SegmentationParams
+
+    known = {f.name for f in fields(TreeSegmentationConfig)}
+    unknown = set(ts_raw) - known
+    if unknown:
+        raise ValueError(f"Unknown tree_segmentation keys {sorted(unknown)}; expected {sorted(known)}")
+    cfg = TreeSegmentationConfig(**ts_raw)
+
+    if cfg.source not in (None, "chm_tiles", "meta"):
+        raise ValueError(f"tree_segmentation.source must be 'chm_tiles' or 'meta', got {cfg.source!r}")
+    if cfg.preset not in PRESETS:
+        raise ValueError(f"tree_segmentation.preset must be one of {sorted(PRESETS)}, got {cfg.preset!r}")
+    if cfg.geometry not in ("polygon", "point"):
+        raise ValueError(f"tree_segmentation.geometry must be 'polygon' or 'point', got {cfg.geometry!r}")
+    if not isinstance(cfg.block_size, int) or cfg.block_size < 64:
+        raise ValueError(f"tree_segmentation.block_size must be an integer >= 64, got {cfg.block_size!r}")
+    param_names = {f.name for f in fields(SegmentationParams)}
+    bad = set(cfg.params or {}) - param_names
+    if bad:
+        raise ValueError(f"Unknown tree_segmentation.params {sorted(bad)}; expected some of {sorted(param_names)}")
+    cfg.params = dict(cfg.params or {})
+    return cfg
+
+
+def _parse_height_source(entry, i: int) -> HeightSourceSpec:
+    """A heights.sources entry: a source name, or a mapping {source, name?, <options>}."""
+    from ..heights import REQUIRED_OPTIONS, SOURCE_NAMES, SOURCE_OPTIONS
+
+    where = f"heights.sources[{i}]"
+    if isinstance(entry, str):
+        entry = {"source": entry}
+    if not isinstance(entry, dict) or not isinstance(entry.get("source"), str):
+        raise ValueError(f"{where} must be a source name or a mapping with a 'source' key, got {entry!r}")
+    options = dict(entry)
+    source = options.pop("source").strip().lower()
+    name = options.pop("name", None)
+    if source not in SOURCE_NAMES:
+        raise ValueError(f"{where}: unknown height source {source!r}; expected one of {list(SOURCE_NAMES)}")
+    if name is not None and not (isinstance(name, str) and name):
+        raise ValueError(f"{where}.name must be a non-empty string, got {name!r}")
+    unknown = set(options) - SOURCE_OPTIONS[source]
+    if unknown:
+        raise ValueError(
+            f"{where}: unknown options {sorted(unknown)} for source {source!r}; "
+            f"expected some of {sorted(SOURCE_OPTIONS[source])}"
+        )
+    missing = REQUIRED_OPTIONS.get(source, set()) - set(options)
+    if missing:
+        raise ValueError(f"{where}: source {source!r} requires {sorted(missing)}")
+    if source == "file" and options.get("stat", "median") not in ("median", "mean", "max"):
+        raise ValueError(f"{where}.stat must be 'median', 'mean' or 'max', got {options['stat']!r}")
+    return HeightSourceSpec(source=source, options=options, name=name)
+
+
+def _parse_heights_section(h_raw: dict) -> HeightsConfig:
+    from dataclasses import fields
+
+    known = {f.name for f in fields(HeightsConfig)}
+    unknown = set(h_raw) - known
+    if unknown:
+        raise ValueError(f"Unknown heights keys {sorted(unknown)}; expected {sorted(known)}")
+    defaults = HeightsConfig()
+    sources_raw = h_raw.get("sources", ["native"])
+    if not isinstance(sources_raw, list) or not sources_raw:
+        raise ValueError("heights.sources must be a non-empty list")
+    sources = [_parse_height_source(e, i) for i, e in enumerate(sources_raw)]
+    labels = [s.label for s in sources]
+    if len(set(labels)) != len(labels):
+        raise ValueError(f"heights.sources labels must be unique (set `name` to tell repeated sources apart): {labels}")
+
+    values = {}
+    for key in ("default_height", "storey_height", "min_height", "max_height", "min_overlap"):
+        v = h_raw.get(key, getattr(defaults, key))
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+            raise ValueError(f"heights.{key} must be a non-negative number, got {v!r}")
+        values[key] = float(v)
+    if values["storey_height"] <= 0:
+        raise ValueError("heights.storey_height must be positive")
+    if not values["min_height"] < values["max_height"]:
+        raise ValueError("heights.min_height must be below heights.max_height")
+    if not 0 < values["min_overlap"] <= 1:
+        raise ValueError(f"heights.min_overlap must be in (0, 1], got {values['min_overlap']!r}")
+    return HeightsConfig(sources=sources, **values)
+
+
+def _parse_visibility_section(v_raw: dict) -> VisibilityConfig:
+    from dataclasses import fields
+
+    known = {f.name for f in fields(VisibilityConfig)}
+    unknown = set(v_raw) - known
+    if unknown:
+        raise ValueError(f"Unknown visibility keys {sorted(unknown)}; expected {sorted(known)}")
+    cfg = VisibilityConfig(**v_raw)
+    if cfg.engine not in ("raster", "vector"):
+        raise ValueError(f"visibility.engine must be 'raster' or 'vector', got {cfg.engine!r}")
+    if cfg.vegetation not in ("auto", "chm", "crowns"):
+        raise ValueError(f"visibility.vegetation must be 'auto', 'chm' or 'crowns', got {cfg.vegetation!r}")
+    for key in ("facade_spacing", "resolution", "tile_size"):
+        v = getattr(cfg, key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+            raise ValueError(f"visibility.{key} must be a positive number, got {v!r}")
+    for key in ("facade_offset", "eye_height"):
+        v = getattr(cfg, key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+            raise ValueError(f"visibility.{key} must be a non-negative number, got {v!r}")
+    if not (isinstance(cfg.crown_points, int) and not isinstance(cfg.crown_points, bool) and cfg.crown_points >= 0):
+        raise ValueError(f"visibility.crown_points must be a non-negative integer, got {cfg.crown_points!r}")
+    if not (isinstance(cfg.crown_point_height, (int, float)) and 0 < cfg.crown_point_height <= 1):
+        raise ValueError(f"visibility.crown_point_height must be in (0, 1], got {cfg.crown_point_height!r}")
+    if cfg.end_skip is not None and not (isinstance(cfg.end_skip, (int, float)) and cfg.end_skip >= 0):
+        raise ValueError(f"visibility.end_skip must be null or a non-negative number, got {cfg.end_skip!r}")
+    if not isinstance(cfg.mask_chm_buildings, bool):
+        raise ValueError("visibility.mask_chm_buildings must be true or false")
+    return cfg
+
+
+def _parse_terrain_section(t_raw) -> TerrainConfig:
+    from ..terrain import DEM_SOURCES
+
+    if t_raw is None:  # `terrain:` left empty or null: flat ground
+        return TerrainConfig(source=None)
+    if not isinstance(t_raw, dict):
+        raise ValueError("terrain must be a mapping, e.g. {source: fabdem}")
+    unknown = set(t_raw) - {"source", "resolution"}
+    if unknown:
+        raise ValueError(f"Unknown terrain keys {sorted(unknown)}; expected ['resolution', 'source']")
+    cfg = TerrainConfig(**t_raw)
+    if cfg.source is not None and not isinstance(cfg.source, str):
+        raise ValueError(f"terrain.source must be one of {sorted(DEM_SOURCES)}, a raster path or null")
+    if isinstance(cfg.resolution, bool) or not isinstance(cfg.resolution, (int, float)) or cfg.resolution <= 0:
+        raise ValueError(f"terrain.resolution must be a positive number (metres), got {cfg.resolution!r}")
+    return cfg
+
+
+def _require(d: dict, *keys: str) -> None:
+    missing = [k for k in keys if k not in d]
+    if missing:
+        raise ValueError(f"Config is missing required fields: {missing}")
+
+
+def _require_section(d: dict, section: str, *keys: str) -> None:
+    missing = [k for k in keys if k not in d]
+    if missing:
+        raise ValueError(f"Config section '{section}' is missing required fields: {missing}")

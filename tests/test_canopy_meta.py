@@ -12,12 +12,12 @@ from shapely.geometry import box, mapping
 from shapely.ops import transform as shp_transform
 from pyproj import Transformer
 
-from greenpy.config.loader import load_config
-from greenpy.optional import canopy_meta, chm_sources
-from greenpy.optional.chm_sources import (
+from verdance.config.loader import load_config
+from verdance.optional import canopy_meta, chm_sources
+from verdance.optional.chm_sources import (
     META_V2_NODATA, META_VERSIONS, footprint_dates, mask_to_footprints, quadkeys_for_bounds,
 )
-from greenpy.t30 import get_canopy_cover_raster
+from verdance.t30 import get_canopy_cover_raster
 
 # a 200 x 100 px, 1 m Web-Mercator tile near Cambridge
 ORIGIN = (13_500.0, 6_840_000.0)

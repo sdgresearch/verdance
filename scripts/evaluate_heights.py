@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare building-height sources against reference heights (e.g. Verisk in Cambridge).
 
-Reads the per-source caches written by `greenpy run -p Heights`
+Reads the per-source caches written by `verdance run -p Heights`
 (<base_dir>/database/heights/<label>_<key>.parquet, the newest per label) and
 the reference column of database/buildings.parquet, and reports per source:
 coverage (share of reference buildings the source gives a valid height),
@@ -20,7 +20,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from greenpy.config.loader import load_config
+from verdance.config.loader import load_config
 
 AREA_BINS = [0, 50, 150, 500, np.inf]
 AREA_LABELS = ["<50 m2", "50-150 m2", "150-500 m2", ">500 m2"]
