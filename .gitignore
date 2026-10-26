@@ -4,6 +4,7 @@
 .Renviron
 .RData
 CLAUDE.md
+.claude/
 *.Rhistory
 *.Rproj
 *.tif
