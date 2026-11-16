@@ -2160,18 +2160,7 @@ $VERDANCE_IVY_DIR when that is set.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>src/verdance/utils/sedona_config.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">37</span>
-<span class="normal">38</span>
-<span class="normal">39</span>
-<span class="normal">40</span>
-<span class="normal">41</span>
-<span class="normal">42</span>
-<span class="normal">43</span>
-<span class="normal">44</span>
-<span class="normal">45</span>
-<span class="normal">46</span>
-<span class="normal">47</span>
-<span class="normal">48</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">48</span>
 <span class="normal">49</span>
 <span class="normal">50</span>
 <span class="normal">51</span>
@@ -2216,7 +2205,11 @@ $VERDANCE_IVY_DIR when that is set.</p>
 <span class="normal">90</span>
 <span class="normal">91</span>
 <span class="normal">92</span>
-<span class="normal">93</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get_spark</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">SparkSession</span><span class="p">:</span>
+<span class="normal">93</span>
+<span class="normal">94</span>
+<span class="normal">95</span>
+<span class="normal">96</span>
+<span class="normal">97</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get_spark</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">SparkSession</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Create (or reuse) a local Sedona-enabled SparkSession with the project&#39;s JAR packages.</span>
 
 <span class="sd">    Memory comes from SPARK_DRIVER_MEMORY / SPARK_EXECUTOR_MEMORY when set.</span>
@@ -2249,15 +2242,8 @@ $VERDANCE_IVY_DIR when that is set.</p>
 
     <span class="n">builder</span> <span class="o">=</span> <span class="p">(</span>
         <span class="n">SedonaContext</span><span class="o">.</span><span class="n">builder</span><span class="p">()</span>
-        <span class="o">.</span><span class="n">config</span><span class="p">(</span>
-            <span class="s2">&quot;spark.jars.packages&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;org.apache.sedona:sedona-spark-shaded-3.5_2.12:1.9.0,&quot;</span>
-            <span class="s2">&quot;org.datasyslab:geotools-wrapper:1.9.0-33.5&quot;</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="o">.</span><span class="n">config</span><span class="p">(</span>
-            <span class="s2">&quot;spark.jars.repositories&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;https://artifacts.unidata.ucar.edu/repository/unidata-all&quot;</span><span class="p">,</span>
-        <span class="p">)</span>
+        <span class="o">.</span><span class="n">config</span><span class="p">(</span><span class="s2">&quot;spark.jars.packages&quot;</span><span class="p">,</span> <span class="n">SEDONA_PACKAGES</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">config</span><span class="p">(</span><span class="s2">&quot;spark.jars.repositories&quot;</span><span class="p">,</span> <span class="n">SEDONA_REPOSITORIES</span><span class="p">)</span>
         <span class="o">.</span><span class="n">config</span><span class="p">(</span><span class="s2">&quot;spark.sql.debug.maxToStringFields&quot;</span><span class="p">,</span> <span class="mi">10000</span><span class="p">)</span>
         <span class="o">.</span><span class="n">config</span><span class="p">(</span><span class="s2">&quot;spark.default.parallelism&quot;</span><span class="p">,</span> <span class="mi">200</span><span class="p">)</span>
         <span class="o">.</span><span class="n">config</span><span class="p">(</span><span class="s2">&quot;spark.sql.adaptive.coalescePartitions.enabled&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
