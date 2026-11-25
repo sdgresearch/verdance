@@ -64,6 +64,7 @@ class Source:
 
     @property
     def metrics(self) -> list[str]:
+        """All metric names provided by this source (mapped columns plus computed expressions)."""
         return [*self.columns.values(), *self.expressions]
 
 
@@ -135,7 +136,7 @@ def describe(name: str, module: str = "") -> Metric:
     label = name.replace("_", " ")
     if base in RULE_FLAGS:
         return Metric(name, _rule_label(base), module or "Rule", "boolean", better="high", note=_rule_note(base))
-    if m := re.fullmatch(r"pct_(meets_\w+)", base):
+    if (m := re.fullmatch(r"pct_(meets_\w+)", base)) and m.group(1) in RULE_FLAGS:
         criterion = _rule_label(m.group(1)).removeprefix("Meets ")
         return Metric(name, f"% of buildings meeting {criterion}", module or "Rule", "percent", better="high",
                       note=_rule_note(m.group(1)))
@@ -225,9 +226,11 @@ def _codes(directory: Path, prefix: str, suffix: str) -> list[str]:
 
 
 def _csv_header(path: str) -> list[str]:
-    first = _expand(path)[0]
-    with open(first, newline="") as f:
-        return next(csv.reader(f))
+    files = _expand(path)
+    if not files:
+        return []
+    with open(files[0], newline="") as f:
+        return next(csv.reader(f), [])
 
 
 def _parquet_columns(path: Path) -> list[str]:
@@ -277,14 +280,20 @@ def _building_sources(cfg: VerdanceConfig, base: Path, db: Path) -> list[Source]
     for b in buffers:
         src = _source(
             db, base / "Visibility", f"Visibility_{b}m.parquet", f"*_{b}m.csv",
-            BUILDING_KEY, {"visible_trees": f"visible_trees_{b}m", "visible_trees_ground": f"visible_trees_ground_{b}m"},
-            "Visibility",
+            BUILDING_KEY, {}, "Visibility",
         )
-        if src and "candidate_trees" in _columns(src.path, src.fmt):
-            # how much obstruction costs: of the trees within the buffer, the share in view (none nearby -> null)
-            src.expressions[f"share_visible_{b}m"] = (
-                "round(100.0 * visible_trees / NULLIF(candidate_trees, 0), 1)"
-            )
+        if src:
+            vcols = _columns(src.path, src.fmt)
+            src.columns = {
+                c: f"{c}_{b}m"
+                for c in ("visible_trees", "visible_trees_ground")
+                if c in vcols
+            }
+            if "visible_trees" in vcols and "candidate_trees" in vcols:
+                # how much obstruction costs: of the trees within the buffer, the share in view (none nearby -> null)
+                src.expressions[f"share_visible_{b}m"] = (
+                    "round(100.0 * visible_trees / NULLIF(candidate_trees, 0), 1)"
+                )
         sources.append(src)
 
     heights = _heights_parquet(cfg, db)
@@ -328,7 +337,8 @@ def _unit_sources(base: Path, db: Path) -> list[Source]:
         merged = db / f"T3_30_300_spectral{suffix}.parquet"
         if merged.exists():
             cols = _parquet_columns(merged)
-            sources.append(Source(str(merged), "parquet", cols[0], {c: c for c in cols[1:] if c not in _SKIP_COLUMNS}, "Merge"))
+            if cols:
+                sources.append(Source(str(merged), "parquet", cols[0], {c: c for c in cols[1:] if c not in _SKIP_COLUMNS}, "Merge"))
         for module in ("T30", "Tree_count", "Spectral"):
             if suffix and module == "Spectral":
                 continue  # Spectral has no DGGS mode
@@ -337,6 +347,8 @@ def _unit_sources(base: Path, db: Path) -> list[Source]:
             if not src:
                 continue
             cols = _columns(src.path, src.fmt)
+            if not cols:
+                continue
             src.key = cols[0]
             src.columns = {c: c for c in cols[1:] if c not in _SKIP_COLUMNS}
             if module == "Tree_count":

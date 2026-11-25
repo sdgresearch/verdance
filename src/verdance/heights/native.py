@@ -16,16 +16,21 @@ DEFAULT_LEVELS_COLS = ("num_floors",)
 
 
 class NativeHeights(HeightSource):
+    """Read building heights (or floor counts) directly from the footprint attributes."""
+
     kind = "native"
 
     def heights(self, buildings: gpd.GeoDataFrame, ctx: HeightContext) -> pd.DataFrame:
+        """Return native heights, falling back to floor counts multiplied by `storey_height`."""
         n = len(buildings)
         height = (
             pd.to_numeric(buildings["building_height"], errors="coerce").to_numpy(dtype=float)
             if "building_height" in buildings.columns else np.full(n, np.nan)
         )
+        h_cfg = self.cfg.heights
+        in_range = np.isfinite(height) & (height >= h_cfg.min_height) & (height <= h_cfg.max_height)
         label = np.full(n, None, dtype=object)
-        quality = np.where(np.isfinite(height), 1.0, 0.0)
+        quality = np.where(np.isfinite(height) & (height > 0), 1.0, 0.0)
 
         levels_col = self.options.get("levels_col") or next(
             (c for c in DEFAULT_LEVELS_COLS if c in buildings.columns), None
@@ -37,8 +42,8 @@ class NativeHeights(HeightSource):
                     f"{list(buildings.columns)} — delete database/buildings.parquet if it was added to the input since"
                 )
             levels = pd.to_numeric(buildings[levels_col], errors="coerce").to_numpy(dtype=float)
-            from_levels = ~(np.isfinite(height) & (height > 0)) & np.isfinite(levels) & (levels > 0)
-            height = np.where(from_levels, levels * self.cfg.heights.storey_height, height)
+            from_levels = ~in_range & np.isfinite(levels) & (levels > 0)
+            height = np.where(from_levels, levels * h_cfg.storey_height, height)
             label[from_levels] = f"{self.label}_levels"
             quality[from_levels] = 0.5
 

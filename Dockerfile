@@ -53,7 +53,7 @@ COPY docker/ ./docker/
 COPY examples/generic.yaml ./examples/generic.yaml
 RUN uv sync --frozen --no-dev --no-cache
 
-# --- Pre-download the Sedona/GeoTools/PostGIS jars and DuckDB's spatial extension,
+# --- Pre-download the Sedona/GeoTools jars and DuckDB's spatial extension,
 # so the container starts fast and needs no network for them at runtime.
 USER verdance
 RUN SPARK_DRIVER_MEMORY=2g python /app/docker/warmup.py \

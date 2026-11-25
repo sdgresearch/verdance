@@ -9,6 +9,9 @@ its own parquet so an interrupted fetch resumes where it stopped.
 
 import hashlib
 import json
+import os
+import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -28,21 +31,30 @@ from .match import grid_chunks
 TILE_PX = 4096
 
 
-def _is_transient(error: Exception) -> bool:
-    """True for GEE/HTTP errors worth retrying (rate limits, timeouts, 5xx, backend blips)."""
-    msg = str(error).lower()
-    return any(s in msg for s in (
-        "429", "500", "502", "503", "504", "rate limit", "quota", "timeout", "timed out",
-        "deadline", "unavailable", "temporar", "internal error", "backend error", "try again",
-    ))
+_HTTP_TRANSIENT_RE = re.compile(r"\b(?:429|500|502|503|504)\b")
 
 
 def _is_too_large(error: Exception) -> bool:
     """True for GEE errors meaning the request must be split (payload/element limits), not retried."""
     msg = str(error).lower()
+    if "quota" in msg or "rate limit" in msg:
+        return False
     return any(s in msg for s in (
         "too large", "payload size", "request size", "exceeds", "exceeded", "too many",
         "accumulating over", "user memory limit",
+    ))
+
+
+def _is_transient(error: Exception) -> bool:
+    """True for GEE/HTTP errors worth retrying (rate limits, timeouts, 5xx, backend blips)."""
+    if _is_too_large(error):
+        return False
+    msg = str(error).lower()
+    if _HTTP_TRANSIENT_RE.search(msg):
+        return True
+    return any(s in msg for s in (
+        "rate limit", "quota", "timeout", "timed out",
+        "deadline", "unavailable", "temporar", "internal error", "backend error", "try again",
     ))
 
 
@@ -130,14 +142,17 @@ def _download_tile(image, band: str, crs: str, transform: affine.Affine, tile_px
         ee.ImageCollection([image.select([band]).toFloat()]),
         engine="ee", crs=crs, crs_transform=transform, shape_2d=(tile_px, tile_px),
     )
-    da = ds[band]
-    if "time" in da.dims:
-        da = da.isel(time=0, drop=True)
-    # xee returns dims (X, Y); orient to (y, x) descending-y like a GeoTIFF
-    da = da.rename({d: ("x" if d.lower() in ("x", "lon") else "y") for d in da.dims}).transpose("y", "x")
-    da = da.sortby("y", ascending=False).sortby("x")
-    # the actual pixel fetch happens in .load(); retry transient GEE/network blips
-    da = _with_retry(lambda: da.load(), what=f"tile {path.name}")
+    try:
+        da = ds[band]
+        if "time" in da.dims:
+            da = da.isel(time=0, drop=True)
+        # xee returns dims (X, Y); orient to (y, x) descending-y like a GeoTIFF
+        da = da.rename({d: ("x" if d.lower() in ("x", "lon") else "y") for d in da.dims}).transpose("y", "x")
+        da = da.sortby("y", ascending=False).sortby("x")
+        # the actual pixel fetch happens in .load(); retry transient GEE/network blips
+        da = _with_retry(lambda: da.load(), what=f"tile {path.name}")
+    finally:
+        ds.close()
     if not np.isfinite(da.values).any():
         path.with_suffix(".empty").touch()
         return
@@ -199,21 +214,39 @@ def _fetch_chunk(collection_id: str, bounds: tuple, properties: list[str], path:
         mx, my = (minx + maxx) / 2, (miny + maxy) / 2
         quarters = [(minx, miny, mx, my), (mx, miny, maxx, my), (minx, my, mx, maxy), (mx, my, maxx, maxy)]
         parts = []
-        for i, q in enumerate(quarters):
-            qp = path.with_name(f"{path.stem}_q{depth}{i}.parquet")
-            _fetch_chunk(collection_id, q, properties, qp, depth + 1)
-            parts.append(gpd.read_parquet(qp))
-            qp.unlink()
-        gdf = gpd.GeoDataFrame(pd.concat(parts, ignore_index=True), crs=4326)
+        qpaths = [
+            path.with_name(f".{path.stem}.{os.getpid()}.{threading.get_ident()}_q{depth}{i}.parquet")
+            for i in range(len(quarters))
+        ]
+        try:
+            for q, qp in zip(quarters, qpaths):
+                _fetch_chunk(collection_id, q, properties, qp, depth + 1)
+                part = gpd.read_parquet(qp)
+                if not part.empty:
+                    parts.append(part)
+        finally:
+            for qp in qpaths:
+                qp.unlink(missing_ok=True)
+        if parts:
+            gdf = gpd.GeoDataFrame(pd.concat(parts, ignore_index=True), crs=4326)
+        else:
+            gdf = gpd.GeoDataFrame({k: [] for k in properties}, geometry=[], crs=4326)
     if gdf.empty or "geometry" not in gdf.columns:
         # GEE returns a frame without a geometry column for chunks with no features
         gdf = gpd.GeoDataFrame({k: [] for k in properties}, geometry=[], crs=4326)
     elif gdf.crs is None:
         gdf = gdf.set_crs(4326)
-    gdf = gdf[[c for c in properties if c in gdf.columns] + ["geometry"]]
-    tmp = path.with_suffix(".parquet.part")
-    gdf.to_parquet(tmp, index=False)
-    tmp.replace(path)
+    for col in properties:
+        if col not in gdf.columns:
+            gdf[col] = np.nan
+    gdf = gdf[list(properties) + ["geometry"]]
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.part")
+    try:
+        gdf.to_parquet(tmp, index=False)
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
 
 
 def list_asset_names(root: str, cache: Path, project: str | None) -> list[str]:
@@ -225,14 +258,23 @@ def list_asset_names(root: str, cache: Path, project: str | None) -> list[str]:
     ensure_gee(project)
     names, token = [], None
     while True:
-        page = ee.data.listAssets({"parent": root, **({"pageToken": token} if token else {})})
+        req = {"parent": root, **({"pageToken": token} if token else {})}
+        page = _with_retry(lambda r=req: ee.data.listAssets(r), what=f"listAssets {root}")
         names += [a["name"].rstrip("/").split("/")[-1] for a in page.get("assets", [])]
         token = page.get("nextPageToken")
         if not token:
             break
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps(sorted(names)))
-    return sorted(names)
+    result = sorted(names)
+    if result:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache.with_name(f".{cache.name}.{os.getpid()}.{threading.get_ident()}.part")
+        try:
+            tmp.write_text(json.dumps(result))
+            tmp.replace(cache)
+        finally:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+    return result
 
 
 def bounds_4326(buildings: gpd.GeoDataFrame, pad_deg: float = 0.001) -> tuple:

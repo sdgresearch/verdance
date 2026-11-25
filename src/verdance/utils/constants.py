@@ -9,7 +9,12 @@ from dotenv import find_dotenv, load_dotenv
 if os.getenv("VERDANCE_NO_DOTENV", "").strip().lower() not in ("1", "true", "yes"):
     load_dotenv(find_dotenv(usecwd=True))
 
-GEE_PROJECT_NAME = os.getenv("GEE_PROJECT_NAME", "")
+def get_gee_project_name() -> str:
+    """Return the configured Earth Engine project name from the environment."""
+    return os.getenv("GEE_PROJECT_NAME", "")
+
+
+GEE_PROJECT_NAME = get_gee_project_name()
 
 
 def _resolve_java_home() -> str:
@@ -23,15 +28,22 @@ def _resolve_java_home() -> str:
     if jdk:
         p = Path(jdk)
         if p.is_absolute():
-            return str(p)
-        candidates = [Path.home() / ".jdk" / jdk]
-        data_dir = os.getenv("DATA_DIR", "")
-        if data_dir:
-            candidates.insert(0, Path(data_dir).parent / ".jdk" / jdk)
-        for c in candidates:
-            if c.exists():
-                return str(c)
+            if p.exists():
+                return str(p)
+        else:
+            candidates = [Path.home() / ".jdk" / jdk]
+            data_dir = os.getenv("DATA_DIR", "")
+            if data_dir:
+                candidates.insert(0, Path(data_dir).parent / ".jdk" / jdk)
+            for c in candidates:
+                if c.exists():
+                    return str(c)
     return os.getenv("JAVA_HOME", "")
 
 
-JAVA_HOME = _resolve_java_home()
+def get_java_home() -> str:
+    """Resolve the current JDK location from JDK_HOME / JAVA_HOME."""
+    return _resolve_java_home()
+
+
+JAVA_HOME = get_java_home()

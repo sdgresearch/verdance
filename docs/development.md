@@ -47,8 +47,9 @@ Releases are published to PyPI by GitHub Actions through [trusted publishing](ht
 so no API token is stored anywhere. To cut one:
 
 1. Bump `__version__` in `src/verdance/__init__.py` — `[tool.hatch.version]` reads it from
-   there, so it is the only place the version is set.
-2. Move the `[Unreleased]` section of `CHANGELOG.md` under the new version number.
+   there, so it is the only place the package version is set.
+2. Update `version` and `date-released` in `CITATION.cff`, and move the `[Unreleased]`
+   section of `CHANGELOG.md` under the new version number.
 3. Open a pull request, and once it is merged tag the merge commit and push the tag:
 
    ```bash

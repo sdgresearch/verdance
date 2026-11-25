@@ -44,6 +44,7 @@ class HeightSource(ABC):
 
     @property
     def label(self) -> str:
+        """Display and column label for this height source (defaults to its registry name)."""
         return self.spec.label
 
     def cache_key(self) -> str:
@@ -84,6 +85,7 @@ class VectorHeightSource(HeightSource):
         """Source polygons with a numeric `height` column covering the footprints, in cfg.crs."""
 
     def heights(self, buildings: gpd.GeoDataFrame, ctx: HeightContext) -> pd.DataFrame:
+        """Fetch source polygons and attach area-weighted heights to `buildings`."""
         from .match import match_by_overlap
 
         source = self.fetch(buildings, ctx)
@@ -101,6 +103,7 @@ class RasterHeightSource(HeightSource):
         """Single-band height rasters (shared CRS and pixel size, NaN/nodata = no value) covering the footprints."""
 
     def heights(self, buildings: gpd.GeoDataFrame, ctx: HeightContext) -> pd.DataFrame:
+        """Fetch source rasters and compute per-footprint zonal height statistics."""
         from .match import zonal_heights
 
         return zonal_heights(buildings, self.rasters(buildings, ctx), self.stat, ctx.cache_dir)

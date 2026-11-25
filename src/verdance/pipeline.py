@@ -2,6 +2,8 @@
 Data loading and setup pipeline. All paths and column names come from VerdanceConfig.
 """
 
+import os
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -9,9 +11,21 @@ import geopandas as gpd
 from loguru import logger
 from pyspark.sql.session import SparkSession
 
-from .config.schema import VerdanceConfig, is_open_buildings, is_osm, is_overture
+from .config.schema import VerdanceConfig, building_source, is_open_buildings, is_osm, is_overture
 from .dggs import get_system
 from .utils.cache import cache_dir_for
+
+
+def _write_parquet_atomic(df: pd.DataFrame | gpd.GeoDataFrame, path: Path) -> None:
+    """Write a DataFrame/GeoDataFrame to parquet via a unique sibling temp file and atomic rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.part")
+    try:
+        df.to_parquet(tmp, index=False)
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
 
 
 def _read_vector(path: str, layer: str | None = None) -> gpd.GeoDataFrame:
@@ -28,9 +42,18 @@ def _rename_columns(gdf: gpd.GeoDataFrame, mapping: dict[str | None, str]) -> gp
 
     Renames are applied per dataset (one mapping per file) because different
     config columns may share the same source name (e.g. road_node_id and
-    park_id both defaulting to 'id').
+    park_id both defaulting to 'id'). Existing columns that would collide with
+    a distinct rename target are dropped first so duplicate column names are
+    never produced.
     """
-    return gdf.rename(columns={k: v for k, v in mapping.items() if k and k in gdf.columns})
+    renames = {k: v for k, v in mapping.items() if k and k in gdf.columns and k != v}
+    if not renames:
+        return gdf
+    collisions = [v for v in renames.values() if v in gdf.columns]
+    if collisions:
+        logger.warning(f"Dropping pre-existing column(s) {collisions} that collide with rename targets {renames}")
+        gdf = gdf.drop(columns=collisions)
+    return gdf.rename(columns=renames)
 
 
 def setup_output_dirs(cfg: VerdanceConfig) -> dict[str, Path]:
@@ -58,18 +81,18 @@ def _derive_road_nodes(edges_gdf: gpd.GeoDataFrame) -> tuple[gpd.GeoDataFrame, g
     """Derive road nodes from edge endpoint geometries when no nodes dataset is provided."""
     from shapely.geometry import Point
 
+    edges_gdf = edges_gdf[edges_gdf.geometry.notna() & ~edges_gdf.geometry.is_empty].copy()
+    if not edges_gdf.empty and (edges_gdf.geometry.geom_type == "MultiLineString").any():
+        edges_gdf = edges_gdf.explode(index_parts=False).reset_index(drop=True)
+
     coord_to_id: dict[tuple, int] = {}
     node_records: list[dict] = []
     start_ids: list[int] = []
     end_ids: list[int] = []
 
     for geom in edges_gdf.geometry:
-        if geom.geom_type == "MultiLineString":
-            start_pt = geom.geoms[0].coords[0]
-            end_pt = geom.geoms[-1].coords[-1]
-        else:
-            coords = list(geom.coords)
-            start_pt, end_pt = coords[0], coords[-1]
+        coords = list(geom.coords)
+        start_pt, end_pt = coords[0], coords[-1]
         # round to nearest decimetre to merge near-duplicate endpoints
         s = (round(start_pt[0], 1), round(start_pt[1], 1))
         e = (round(end_pt[0], 1), round(end_pt[1], 1))
@@ -81,10 +104,12 @@ def _derive_road_nodes(edges_gdf: gpd.GeoDataFrame) -> tuple[gpd.GeoDataFrame, g
         start_ids.append(coord_to_id[s])
         end_ids.append(coord_to_id[e])
 
-    edges_gdf = edges_gdf.copy()
     edges_gdf["road_edge_start"] = start_ids
     edges_gdf["road_edge_end"] = end_ids
-    nodes_gdf = gpd.GeoDataFrame(node_records, crs=edges_gdf.crs)
+    if node_records:
+        nodes_gdf = gpd.GeoDataFrame(node_records, crs=edges_gdf.crs)
+    else:
+        nodes_gdf = gpd.GeoDataFrame({"road_node_id": pd.Series(dtype="int64")}, geometry=[], crs=edges_gdf.crs)
     return edges_gdf, nodes_gdf
 
 
@@ -113,18 +138,23 @@ def _ensure_edge_lengths(edges_gdf: gpd.GeoDataFrame, source_col: str) -> gpd.Ge
 
 
 def _coerce_null_columns(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Null out fully-null columns so Spark can accept them (it can't infer a dtype from all-null).
+    """Null out fully-null non-geometry columns so Spark can accept them (it can't infer a dtype from all-null).
 
     Both float NaN (which stringifies to "nan") and object/None or pandas <NA>
     values are mapped to None, so an all-null object column does not leak the
     literal string "None" into Spark.
     """
-    for col in gdf.columns:
-        if gdf[col].isna().all():
-            gdf = gdf.copy()
-            gdf[col] = gdf[col].astype(str).replace(
-                {"nan": None, "None": None, "NaN": None, "NaT": None, "<NA>": None}
-            )
+    if gdf.empty:
+        return gdf
+    geom_col = gdf.geometry.name if isinstance(gdf, gpd.GeoDataFrame) else None
+    null_cols = [col for col in gdf.columns if col != geom_col and gdf[col].isna().all()]
+    if not null_cols:
+        return gdf
+    gdf = gdf.copy()
+    for col in null_cols:
+        gdf[col] = gdf[col].astype(str).replace(
+            {"nan": None, "None": None, "NaN": None, "NaT": None, "<NA>": None}
+        )
     return gdf
 
 
@@ -132,6 +162,7 @@ def load_tables(
     sedona: SparkSession, cfg: VerdanceConfig,
     dggs: str | None = None, dggs_resolution: int | None = None,
     load_roads_parks: bool = True,
+    load_buildings_gdf: bool = False,
 ) -> dict:
     """
     Load all datasets from paths in cfg, rename columns to canonical names,
@@ -144,8 +175,8 @@ def load_tables(
     `load_roads_parks` can be turned off for the modules that never touch them
     (everything except T300), which skips reading the road and park datasets
     into the driver and registering their views; their dict entries are then
-    None. On England those four files are 898 MB of the 1,887 MB this function
-    would otherwise read for every module.
+    None. `load_buildings_gdf` defaults to False because analysis modules query
+    the lazy Spark `buildings` view rather than an in-driver GeoDataFrame.
     """
     logger.debug("Loading tables from config paths")
 
@@ -160,13 +191,16 @@ def load_tables(
     census_parquet = db_dir / "census_boundaries.parquet"
     buildings_overlay_parquet = db_dir / "census_buildings_overlay.parquet"
 
-    if not buildings_parquet.exists():
+    required = [buildings_parquet, census_parquet]
+    if load_roads_parks:
+        required += [parks_sites_parquet, parks_access_parquet, roads_edges_parquet, roads_nodes_parquet]
+    if not all(p.exists() for p in required):
         _setup_parquet_files(cfg, db_dir)
 
     if dggs is not None:
         census_parquet, buildings_overlay_parquet = ensure_dggs_files(sedona, db_dir, cfg, dggs, dggs_resolution)
 
-    buildings_gdf = gpd.read_parquet(buildings_parquet)
+    buildings_gdf = gpd.read_parquet(buildings_parquet) if load_buildings_gdf else None
     census_boundaries_gdf = gpd.read_parquet(census_parquet)
     road_edges_gdf = gpd.read_parquet(roads_edges_parquet) if load_roads_parks else None
     road_nodes_gdf = gpd.read_parquet(roads_nodes_parquet) if load_roads_parks else None
@@ -189,10 +223,12 @@ def load_tables(
         park_access_filtered = _filter_park_access(gpd.read_parquet(parks_access_parquet), park_sites_filtered, cfg)
 
         # registered for interactive use; the pipeline itself reads the frames above
-        sedona.createDataFrame(_coerce_null_columns(park_sites_filtered)) \
-            .createOrReplaceTempView("public_park_sites")
-        sedona.createDataFrame(_coerce_null_columns(park_access_filtered)) \
-            .createOrReplaceTempView("public_park_accesses")
+        if not park_sites_filtered.empty:
+            sedona.createDataFrame(_coerce_null_columns(park_sites_filtered)) \
+                .createOrReplaceTempView("public_park_sites")
+        if not park_access_filtered.empty:
+            sedona.createDataFrame(_coerce_null_columns(park_access_filtered)) \
+                .createOrReplaceTempView("public_park_accesses")
 
     return {
         "census_boundaries_gdf": census_boundaries_gdf,
@@ -201,6 +237,7 @@ def load_tables(
         "parks_access_gdf": park_access_filtered,
         "road_edges_gdf": road_edges_gdf,
         "road_nodes_gdf": road_nodes_gdf,
+        "overlay_path": buildings_overlay_parquet,
         "output_dirs": dirs,
     }
 
@@ -217,7 +254,7 @@ def _setup_parquet_files(cfg: VerdanceConfig, db_dir: Path) -> None:
 
     census_gdf = _read_vector(cfg.data.census_boundaries).to_crs(cfg.crs)
     census_gdf["area"] = census_gdf.geometry.area / 1_000_000
-    census_gdf.to_parquet(db_dir / "census_boundaries.parquet", index=False)
+    _write_parquet_atomic(census_gdf, db_dir / "census_boundaries.parquet")
 
     osm_layers = [s for s in ("buildings", "parks_sites", "parks_access", "roads") if is_osm(getattr(cfg.data, s))]
     if osm_layers or is_overture(cfg.data.parks_sites):
@@ -249,9 +286,8 @@ def _setup_parquet_files(cfg: VerdanceConfig, db_dir: Path) -> None:
             buildings_gdf, {col.building_id: "building_id", col.building_height_col: "building_height"}
         )
         if "building_height" in buildings_gdf.columns:
-            # non-numeric values become NaN and are skipped by the Visibility module
+            # non-numeric values become NaN and fall back to later Heights sources or default_height
             buildings_gdf["building_height"] = pd.to_numeric(buildings_gdf["building_height"], errors="coerce")
-    buildings_gdf.to_parquet(db_dir / "buildings.parquet", index=False)
 
     if is_osm(cfg.data.parks_sites):
         parks_sites_gdf = osm.fetch_osm_parks(query_polygon, cfg.osm.park_tags, cfg.osm.exclude_private, cfg.crs)
@@ -260,8 +296,8 @@ def _setup_parquet_files(cfg: VerdanceConfig, db_dir: Path) -> None:
         parks_sites_gdf = overture.fetch_overture_parks(query_polygon, cfg.overture.park_land_use, cfg.crs)
     else:
         parks_sites_gdf = _read_vector(cfg.data.parks_sites).to_crs(cfg.crs)
-        parks_sites_gdf = parks_sites_gdf.rename(columns={col.park_id: "park_id"})
-    parks_sites_gdf.to_parquet(db_dir / "parks_sites.parquet", index=False)
+        parks_sites_gdf = _rename_columns(parks_sites_gdf, {col.park_id: "park_id"})
+    _write_parquet_atomic(parks_sites_gdf, db_dir / "parks_sites.parquet")
 
     if is_osm(cfg.data.roads):
         road_edges_gdf, road_nodes_gdf = osm.fetch_osm_roads(query_polygon, cfg.osm.network_type, cfg.crs)
@@ -288,19 +324,22 @@ def _setup_parquet_files(cfg: VerdanceConfig, db_dir: Path) -> None:
             road_edges_gdf, road_nodes_gdf = _derive_road_nodes(road_edges_gdf)
         road_edges_gdf = _ensure_edge_lengths(road_edges_gdf, col.road_edge_length)
 
-    road_edges_gdf.to_parquet(db_dir / "road_edges.parquet", index=False)
-    road_nodes_gdf.to_parquet(db_dir / "road_nodes.parquet", index=False)
+    _write_parquet_atomic(road_edges_gdf, db_dir / "road_edges.parquet")
+    _write_parquet_atomic(road_nodes_gdf, db_dir / "road_nodes.parquet")
 
     # Access points last: OSM derivation needs the parks and roads from above
     if is_osm(cfg.data.parks_access):
         parks_access_gdf = osm.derive_park_access_points(parks_sites_gdf, road_edges_gdf, query_polygon, cfg.crs)
     else:
         parks_access_gdf = _read_vector(cfg.data.parks_access).to_crs(cfg.crs)
-        parks_access_gdf = parks_access_gdf.rename(columns={col.park_id: "park_id"})
-        if col.park_access_ref_col and col.park_access_ref_col in parks_access_gdf.columns:
-            parks_access_gdf = parks_access_gdf.rename(columns={col.park_access_ref_col: "park_access_ref"})
-    parks_access_gdf.to_parquet(db_dir / "parks_access.parquet", index=False)
+        parks_access_gdf = _rename_columns(
+            parks_access_gdf,
+            {col.park_id: "park_id", col.park_access_ref_col: "park_access_ref"},
+        )
+    _write_parquet_atomic(parks_access_gdf, db_dir / "parks_access.parquet")
 
+    # Write buildings.parquet last (atomically) so a partial failure never leaves a sentinel behind
+    _write_parquet_atomic(buildings_gdf, db_dir / "buildings.parquet")
     build_buildings_overlay(db_dir, cfg)
 
     logger.info("Parquet cache created successfully")
@@ -334,7 +373,8 @@ def ensure_context_buildings(cfg: VerdanceConfig) -> Path | None:
         return None
     if out.exists():
         meta = pq.read_schema(out).metadata or {}
-        if json.loads(meta.get(b"verdance_context") or meta.get(b"greenpy_context", b"{}")).get("buffer") == cfg.context_buffer:
+        cached = json.loads(meta.get(b"verdance_context") or meta.get(b"greenpy_context", b"{}"))
+        if cached.get("buffer") == cfg.context_buffer and cached.get("source", source) == source:
             return out
 
     census_gdf = gpd.read_parquet(db_dir / "census_boundaries.parquet")
@@ -357,13 +397,20 @@ def ensure_context_buildings(cfg: VerdanceConfig) -> Path | None:
     inside = set(pd.read_parquet(db_dir / "buildings.parquet", columns=["building_id"])["building_id"].astype(str))
     gdf = gdf[~gdf["building_id"].astype(str).isin(inside)].reset_index(drop=True)
 
-    # GeoParquet first, then the ring width added to its metadata (a changed buffer refetches)
-    tmp = out.with_name(out.name + ".part")
-    gdf.to_parquet(tmp, index=False)
-    table = pq.read_table(tmp)
-    meta = {**(table.schema.metadata or {}), b"verdance_context": json.dumps({"buffer": cfg.context_buffer}).encode()}
-    pq.write_table(table.replace_schema_metadata(meta), tmp)
-    tmp.replace(out)
+    # GeoParquet first, then the ring width/source added to its metadata (a changed buffer or source refetches)
+    tmp = out.with_name(f".{out.name}.{os.getpid()}.{threading.get_ident()}.part")
+    try:
+        gdf.to_parquet(tmp, index=False)
+        table = pq.read_table(tmp)
+        meta = {
+            **(table.schema.metadata or {}),
+            b"verdance_context": json.dumps({"buffer": cfg.context_buffer, "source": source}).encode(),
+        }
+        pq.write_table(table.replace_schema_metadata(meta), tmp)
+        tmp.replace(out)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
     logger.info(f"Context ring: {len(gdf)} buildings -> {out.name}")
     return out
 
@@ -373,7 +420,7 @@ def all_buildings(cfg: VerdanceConfig, columns: list[str] | None = None) -> gpd.
     db_dir = Path(cfg.output.base_dir) / "database"
     parts = [gpd.read_parquet(db_dir / "buildings.parquet", columns=columns)]
     ctx = db_dir / "context_buildings.parquet"
-    if ctx.exists() and cfg.context_buffer > 0:
+    if ctx.exists() and cfg.context_buffer > 0 and building_source(cfg.data.buildings) is not None:
         c = gpd.read_parquet(ctx)
         parts.append(c[[k for k in (columns or c.columns) if k in c.columns]])
     out = gpd.GeoDataFrame(pd.concat(parts, ignore_index=True), geometry="geometry", crs=parts[0].crs)
@@ -393,7 +440,7 @@ def _build_overlay(buildings_gdf: gpd.GeoDataFrame, boundaries_gdf: gpd.GeoDataF
     points_gdf["geometry"] = points_gdf.representative_point()
     overlay_gdf = gpd.sjoin(points_gdf, boundaries_gdf[code_cols + ["geometry"]], how="inner", predicate="intersects")
     overlay_df = pd.DataFrame(overlay_gdf[["building_id"] + code_cols]).drop_duplicates(subset="building_id")
-    overlay_df.to_parquet(out_path, index=False)
+    _write_parquet_atomic(overlay_df, out_path)
 
 
 def build_buildings_overlay(db_dir: Path, cfg: VerdanceConfig) -> None:
@@ -433,16 +480,20 @@ def ensure_dggs_files(
     if not grid_parquet.exists():
         census_gdf = gpd.read_parquet(db_dir / "census_boundaries.parquet")
         grid_gdf = system.build_boundaries(sedona, census_gdf, resolution, cfg.columns.geo_levels, cfg.crs)
-        grid_gdf.to_parquet(grid_parquet, index=False)
+        _write_parquet_atomic(grid_gdf, grid_parquet)
 
     if not grid_overlay_parquet.exists():
         logger.info(f"Building {system.name}/buildings overlay lookup")
         sedona.read.format("geoparquet").load(str(grid_parquet)).createOrReplaceTempView("dggs_grid_src")
         sedona.read.format("geoparquet").load(str(db_dir / "buildings.parquet")) \
             .createOrReplaceTempView("dggs_buildings_src")
-        code_cols = cfg.columns.geo_levels + [system.column_name(resolution)]
-        overlay_df = system.build_buildings_overlay(sedona, "dggs_buildings_src", "dggs_grid_src", code_cols)
-        overlay_df.to_parquet(grid_overlay_parquet, index=False)
+        try:
+            code_cols = cfg.columns.geo_levels + [system.column_name(resolution)]
+            overlay_df = system.build_buildings_overlay(sedona, "dggs_buildings_src", "dggs_grid_src", code_cols)
+            _write_parquet_atomic(overlay_df, grid_overlay_parquet)
+        finally:
+            sedona.catalog.dropTempView("dggs_grid_src")
+            sedona.catalog.dropTempView("dggs_buildings_src")
 
     return grid_parquet, grid_overlay_parquet
 
@@ -486,6 +537,11 @@ def _filter_parks(parks_sites_gdf: gpd.GeoDataFrame, cfg: VerdanceConfig) -> gpd
     if col.park_function_col and col.park_function_value:
         func_col = col.park_function_col
         func_val = col.park_function_value
+        if func_col not in parks_sites_gdf.columns:
+            raise ValueError(
+                f"park_function_col '{func_col}' not found in parks_sites columns: "
+                f"{list(parks_sites_gdf.columns)}"
+            )
         parks_sites_gdf = parks_sites_gdf[parks_sites_gdf[func_col] == func_val]
     if cfg.park_min_area_ha:
         n_before = len(parks_sites_gdf)

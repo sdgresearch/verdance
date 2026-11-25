@@ -9,6 +9,7 @@ zonal-statistics paths as the GEE source: t30.get_canopy_cover_raster and,
 as an already-binary tile, t30_buildings.get_canopy_cover_buildings_raster.
 """
 
+import hashlib
 from pathlib import Path
 
 import geopandas as gpd
@@ -25,7 +26,8 @@ from .chm_sources import boundary_bounds_in, build_vrt, download_meta_tiles, foo
 
 def meta_cache_path(cfg: VerdanceConfig, name: str, low_threshold: float, high_threshold: float) -> Path:
     """Cache location for a cropped canopy mask, keyed by release and height band."""
-    tag = f"{name}_{cfg.data.meta_chm}_h{low_threshold:g}-{high_threshold:g}"
+    version = cfg.data.meta_chm or "v1"
+    tag = f"{name}_{version}_h{low_threshold:g}-{high_threshold:g}"
     return Path(cfg.output.base_dir) / "database" / "meta_canopy" / f"{tag}.tif"
 
 
@@ -69,11 +71,12 @@ def meta_binary_canopy(
     if dates:
         logger.info(f"Meta CHM {version} imagery dates for this area: {dates[0]} to {dates[1]}")
 
-    key = "_".join(sorted(Path(p).stem for p in paths))
+    key = hashlib.sha1("|".join(sorted(Path(p).stem for p in paths)).encode()).hexdigest()[:12]
     vrt = build_vrt(paths, cache_dir / "vrt" / f"meta_{version}_{key}.vrt")
     # pad by a few native pixels so reprojection has no empty edge
     bounds = boundary_bounds_in(vrt, geo_boundary_gdf, pad=5.0)
-    heights = rxr.open_rasterio(vrt, masked=True).rio.clip_box(*bounds)
+    with rxr.open_rasterio(vrt, masked=True) as src:
+        heights = src.rio.clip_box(*bounds).load()
 
     binary = ((heights >= low_threshold) & (heights <= high_threshold)).astype("float32")
     binary = binary.where(heights.notnull()).rio.write_nodata(np.nan)

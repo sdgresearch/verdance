@@ -15,6 +15,7 @@ over its sightlines. Ground is flat (terrain is raster-engine only); skip
 metres at both ends are ignored.
 """
 
+import threading
 import time
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from loguru import logger
 from pyspark.sql.session import SparkSession
 
 from ...config.schema import VerdanceConfig
-from ...utils.data_processing import view_suffix
+from ...utils.data_processing import view_suffix, write_csv_atomic
 from .inputs import VisibilityInputs
 from .observers import facade_points, floor_eyes
 from .pairs import building_counts, eligible_pairs
@@ -37,15 +38,17 @@ from .targets import crown_polygons, tree_targets
 # at a single entry: a session spanning several configs keeps only the current one's
 # arrays, rather than accumulating every config's inputs in memory.
 _INPUTS: dict = {}
+_INPUTS_LOCK = threading.Lock()
 _NO_OBSTACLE = -1e30
 
 
 def _inputs(cfg: VerdanceConfig, overlay_path: Path | None) -> VisibilityInputs:
     key = (cfg.output.base_dir, str(overlay_path))
-    if key not in _INPUTS:
-        _INPUTS.clear()  # evict the previous config's inputs before loading a new one
-        _INPUTS[key] = VisibilityInputs.load(cfg, overlay_path)
-    return _INPUTS[key]
+    with _INPUTS_LOCK:
+        if key not in _INPUTS:
+            _INPUTS.clear()  # evict the previous config's inputs before loading a new one
+            _INPUTS[key] = VisibilityInputs.load(cfg, overlay_path)
+        return _INPUTS[key]
 
 
 def sightlines(fp, targets, pair_b, pair_t) -> pd.DataFrame:
@@ -70,26 +73,46 @@ def sightlines(fp, targets, pair_b, pair_t) -> pd.DataFrame:
 
 def pair_zreq_sql(sfx: str, skip: float) -> str:
     """Lowest visible eye height per pair (NULL: no front-facing sightline, -1e30: unobstructed)."""
+    ray_expr = (
+        f"ST_LineSubstring(r.geometry, {skip} / r.len, 1.0D - {skip} / r.len)"
+        if skip > 0 else "r.geometry"
+    )
     return f"""
-    WITH hits AS (
+    WITH clipped_rays AS (
+        SELECT r.ray_id, r.ox, r.oy, r.tx, r.ty, r.tz, r.len, r.t_id,
+               {ray_expr} AS geometry
+        FROM vis_rays_{sfx} r
+        WHERE r.len > {2 * skip}
+    ),
+    hits AS (
         SELECT r.ray_id, r.ox, r.oy, r.tx, r.ty, r.tz, r.len, o.h,
                CASE WHEN o.kind = 't' THEN ST_Difference(ST_Intersection(r.geometry, o.geometry), c.geometry)
                     ELSE ST_Intersection(r.geometry, o.geometry) END AS inter
-        FROM vis_rays_{sfx} r
+        FROM clipped_rays r
         JOIN vis_obstacles_{sfx} o ON ST_Intersects(r.geometry, o.geometry)
         JOIN vis_crowns_{sfx} c ON c.t_id = r.t_id
-        WHERE r.len > {2 * skip}
-          AND NOT (o.kind = 't' AND o.idx = r.t_id)
+        WHERE NOT (o.kind = 't' AND o.idx = r.t_id)
     ),
-    crossings AS (
-        SELECT ray_id, tz, h,
-               GREATEST(ST_Distance(ST_Point(ox, oy), inter) / len, {skip} / len) AS f_lo,
-               LEAST(1.0D - ST_Distance(ST_Point(tx, ty), inter) / len, 1.0D - {skip} / len) AS f_hi
+    parts AS (
+        SELECT ray_id, ox, oy, tx, ty, tz, len, h, EXPLODE(ST_Dump(inter)) AS part
         FROM hits
         WHERE NOT ST_IsEmpty(inter)
     ),
+    crossings AS (
+        SELECT ray_id, tz, h,
+               GREATEST(ST_Distance(ST_Point(ox, oy), part) / len, {skip} / len) AS f_lo,
+               LEAST(1.0D - ST_Distance(ST_Point(tx, ty), part) / len, 1.0D - {skip} / len) AS f_hi
+        FROM parts
+        WHERE NOT ST_IsEmpty(part)
+    ),
     ray_z AS (
-        SELECT ray_id, MAX(GREATEST((h - f_lo * tz) / (1.0D - f_lo), (h - f_hi * tz) / (1.0D - f_hi))) AS zreq
+        SELECT ray_id,
+               MAX(GREATEST(
+                   CASE WHEN f_lo >= 1.0D THEN CASE WHEN h > tz THEN CAST('Infinity' AS DOUBLE) ELSE CAST({_NO_OBSTACLE} AS DOUBLE) END
+                        ELSE (h - f_lo * tz) / (1.0D - f_lo) END,
+                   CASE WHEN f_hi >= 1.0D THEN CASE WHEN h > tz THEN CAST('Infinity' AS DOUBLE) ELSE (h - f_lo * tz) / NULLIF(1.0D - f_lo, 0.0D) END
+                        ELSE (h - f_hi * tz) / (1.0D - f_hi) END
+               )) AS zreq
         FROM crossings WHERE f_lo <= f_hi
         GROUP BY ray_id
     )
@@ -142,30 +165,31 @@ def process_geo_code(
         pair_b, pair_t = eligible_pairs(geoms, targets.ref_x, targets.ref_y, params.buffer)
         rays = sightlines(fp, targets, pair_b, pair_t)
 
-        # obstacles: buildings (b, index) and every crown (t, target index or -1 for non-targets)
-        tree_idx = np.full(len(trees), -1)
-        tree_idx[target_rows] = np.arange(len(target_rows))
-        obstacles = pd.concat([
-            pd.DataFrame({"kind": "b", "idx": near, "h": inputs.height[near],
-                          "wkb": shapely.to_wkb(inputs.geoms[near])}),
-            pd.DataFrame({"kind": "t", "idx": tree_idx, "h": trees["tree_height"].to_numpy(dtype=float),
-                          "wkb": shapely.to_wkb(crown_polygons(trees))}),
-        ], ignore_index=True)
-
-        sedona.createDataFrame(obstacles).selectExpr(
-            "kind", "CAST(idx AS BIGINT) AS idx", "CAST(h AS DOUBLE) AS h", "ST_GeomFromWKB(wkb) AS geometry"
-        ).createOrReplaceTempView(f"vis_obstacles_{sfx}")
-        sedona.createDataFrame(pd.DataFrame({"t_id": np.arange(len(targets)), "wkb": shapely.to_wkb(targets.crowns)})) \
-            .selectExpr("CAST(t_id AS BIGINT) AS t_id", "ST_GeomFromWKB(wkb) AS geometry") \
-            .createOrReplaceTempView(f"vis_crowns_{sfx}")
-        sedona.createDataFrame(rays).selectExpr(
-            "CAST(ray_id AS BIGINT) AS ray_id", "CAST(pair_id AS BIGINT) AS pair_id", "CAST(t_id AS BIGINT) AS t_id",
-            "ox", "oy", "tx", "ty", "tz", "len", "ST_MakeLine(ST_Point(ox, oy), ST_Point(tx, ty)) AS geometry",
-        ).createOrReplaceTempView(f"vis_rays_{sfx}")
-
-        z = sedona.sql(pair_zreq_sql(sfx, params.skip)).toPandas()
         z_req = np.full(len(pair_b), np.inf)
-        z_req[z["pair_id"].to_numpy(dtype=np.int64)] = z["zreq"].to_numpy(dtype=float)
+        if len(rays) > 0:
+            # obstacles: buildings (b, index) and every crown (t, target index or -1 for non-targets)
+            tree_idx = np.full(len(trees), -1)
+            tree_idx[target_rows] = np.arange(len(target_rows))
+            obstacles = pd.concat([
+                pd.DataFrame({"kind": "b", "idx": near, "h": inputs.height[near],
+                              "wkb": shapely.to_wkb(inputs.geoms[near])}),
+                pd.DataFrame({"kind": "t", "idx": tree_idx, "h": trees["tree_height"].to_numpy(dtype=float),
+                              "wkb": shapely.to_wkb(crown_polygons(trees))}),
+            ], ignore_index=True)
+
+            sedona.createDataFrame(obstacles).selectExpr(
+                "kind", "CAST(idx AS BIGINT) AS idx", "CAST(h AS DOUBLE) AS h", "ST_GeomFromWKB(wkb) AS geometry"
+            ).createOrReplaceTempView(f"vis_obstacles_{sfx}")
+            sedona.createDataFrame(pd.DataFrame({"t_id": np.arange(len(targets)), "wkb": shapely.to_wkb(targets.crowns)})) \
+                .selectExpr("CAST(t_id AS BIGINT) AS t_id", "ST_GeomFromWKB(wkb) AS geometry") \
+                .createOrReplaceTempView(f"vis_crowns_{sfx}")
+            sedona.createDataFrame(rays).selectExpr(
+                "CAST(ray_id AS BIGINT) AS ray_id", "CAST(pair_id AS BIGINT) AS pair_id", "CAST(t_id AS BIGINT) AS t_id",
+                "ox", "oy", "tx", "ty", "tz", "len", "ST_MakeLine(ST_Point(ox, oy), ST_Point(tx, ty)) AS geometry",
+            ).createOrReplaceTempView(f"vis_rays_{sfx}")
+
+            z = sedona.sql(pair_zreq_sql(sfx, params.skip)).toPandas()
+            z_req[z["pair_id"].to_numpy(dtype=np.int64)] = z["zreq"].to_numpy(dtype=float)
 
         n_floors, z_top = floor_eyes(inputs.height[idx], params.storey_height, params.eye_height)
         counts = building_counts(len(idx), pair_b, z_req, z_top, params.eye_height)
@@ -175,7 +199,7 @@ def process_geo_code(
         counts["height_source"] = inputs.height_source[idx]
         sub = inputs.overlay[["building_id", sub_geo_level]].drop_duplicates("building_id")
         result = counts[OUTPUT_COLUMNS].merge(sub, on="building_id", how="left")
-        result.to_csv(out_path, index=False)
+        write_csv_atomic(result, out_path)
         logger.info(
             f"Visibility (vector): {geo_code} — {len(result)} buildings, {len(pair_b)} pairs, {len(rays)} sightlines "
             f"in {time.time() - start:.1f}s"

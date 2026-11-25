@@ -26,12 +26,14 @@ import hashlib
 import json
 import math
 import os
+import threading
 from pathlib import Path
 from xml.sax.saxutils import escape
 
 import geopandas as gpd
 import numpy as np
 import rasterio
+import rasterio.errors
 import rasterio.warp
 import rasterio.windows
 import requests
@@ -40,6 +42,19 @@ from pyproj import CRS
 from shapely.geometry import box
 
 from ..utils.data_processing import is_chm_tile
+
+_TILE_LOCKS_GUARD = threading.Lock()
+_TILE_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _tile_lock(path: Path) -> threading.Lock:
+    key = str(Path(path).resolve())
+    with _TILE_LOCKS_GUARD:
+        lock = _TILE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _TILE_LOCKS[key] = lock
+        return lock
 
 _META_BUCKET = "https://dataforgood-fb-data.s3.amazonaws.com/forests"
 META_CHM_URL = f"{_META_BUCKET}/v1/alsgedi_global_v6_float/chm/{{quadkey}}.tif"
@@ -107,7 +122,13 @@ def raster_index(files_dir: Path, pattern: str, cache_dir: Path) -> gpd.GeoDataF
     idx = gpd.GeoDataFrame(
         rows, columns=["path", "mtime_ns", "size", "crs", "geometry"], geometry="geometry", crs="EPSG:4326")
     cache.parent.mkdir(parents=True, exist_ok=True)
-    idx.to_parquet(cache)
+    tmp = cache.with_name(f".{cache.name}.{os.getpid()}.{threading.get_ident()}.part")
+    try:
+        idx.to_parquet(tmp)
+        tmp.replace(cache)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
     return idx
 
 
@@ -161,41 +182,48 @@ def download_meta_tiles(
     """
     if version not in META_VERSIONS:
         raise ValueError(f"Unknown Meta CHM version {version!r}; expected one of {sorted(META_VERSIONS)}")
+    if boundary_gdf.empty:
+        return []
     spec = META_VERSIONS[version]
     out_dir = Path(cache_dir) / spec["dir"]
     out_dir.mkdir(parents=True, exist_ok=True)
-    keys = quadkeys_for_bounds(*boundary_gdf.to_crs("EPSG:4326").total_bounds, zoom=spec["zoom"])
+    bounds = boundary_gdf.to_crs("EPSG:4326").total_bounds
+    if np.isnan(bounds).any():
+        return []
+    keys = quadkeys_for_bounds(*bounds, zoom=spec["zoom"])
     paths = []
     for qk in keys:
         path = out_dir / f"{qk}.tif"
-        if path.exists() and not overwrite:
+        with _tile_lock(path):
+            if path.exists() and not overwrite:
+                ensure_tiled(path)
+                paths.append(str(path))
+                continue
+            url = spec["url"].format(quadkey=qk)
+            part = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.part")
+            try:
+                with requests.get(url, stream=True, timeout=60) as r:
+                    if r.status_code in (403, 404):
+                        logger.warning(f"Meta CHM tile {qk} not available ({r.status_code}), skipping")
+                        continue
+                    r.raise_for_status()
+                    size = int(r.headers.get("Content-Length", 0))
+                    logger.info(f"Downloading Meta CHM {version} tile {qk} ({size / 1e6:.0f} MB)")
+                    with open(part, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=8 << 20):
+                            f.write(chunk)
+                    if size and part.stat().st_size != size:
+                        raise IOError(f"Incomplete download of Meta CHM tile {qk}")
+                if spec["footprints"]:
+                    footprints = _download_footprints(spec["footprints"].format(quadkey=qk), path.with_suffix(".geojson"))
+                    mask_to_footprints(part, footprints, path)  # writes path atomically (tmp.replace)
+                else:
+                    part.replace(path)  # atomic rename onto the final path
+            finally:
+                if part.exists():
+                    part.unlink(missing_ok=True)
             ensure_tiled(path)
             paths.append(str(path))
-            continue
-        url = spec["url"].format(quadkey=qk)
-        with requests.get(url, stream=True, timeout=60) as r:
-            if r.status_code in (403, 404):
-                logger.warning(f"Meta CHM tile {qk} not available ({r.status_code}), skipping")
-                continue
-            r.raise_for_status()
-            size = int(r.headers.get("Content-Length", 0))
-            logger.info(f"Downloading Meta CHM {version} tile {qk} ({size / 1e6:.0f} MB)")
-            # per-process temp name so two runs sharing the cache never write the same .part
-            part = path.with_name(f"{path.name}.{os.getpid()}.part")
-            with open(part, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8 << 20):
-                    f.write(chunk)
-            if size and part.stat().st_size != size:
-                part.unlink()
-                raise IOError(f"Incomplete download of Meta CHM tile {qk}")
-        if spec["footprints"]:
-            footprints = _download_footprints(spec["footprints"].format(quadkey=qk), path.with_suffix(".geojson"))
-            mask_to_footprints(part, footprints, path)  # writes path atomically (tmp.replace)
-            part.unlink()
-        else:
-            part.replace(path)  # atomic rename onto the final path
-        ensure_tiled(path)
-        paths.append(str(path))
     return paths
 
 
@@ -207,8 +235,15 @@ def _download_footprints(url: str, out_path: Path) -> dict:
         logger.warning(f"No imagery footprints at {url}; the tile is used unmasked")
         return {"type": "FeatureCollection", "features": []}
     r.raise_for_status()
-    out_path.write_text(r.text)
-    return r.json()
+    data = r.json()
+    tmp = out_path.with_name(f".{out_path.name}.{os.getpid()}.{threading.get_ident()}.part")
+    try:
+        tmp.write_text(r.text)
+        tmp.replace(out_path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+    return data
 
 
 def mask_to_footprints(src_path: Path, footprints: dict, dst_path: Path, block_rows: int = 4096) -> None:
@@ -221,27 +256,35 @@ def mask_to_footprints(src_path: Path, footprints: dict, dst_path: Path, block_r
     import rasterio.features
     from rasterio.warp import transform_geom
 
-    with rasterio.open(src_path) as src:
-        geoms = [transform_geom("EPSG:4326", src.crs, f["geometry"]) for f in footprints.get("features", [])]
-        profile = src.profile.copy()
-        profile.update(driver="GTiff", tiled=True, blockxsize=512, blockysize=512, compress="deflate",
-                       nodata=META_V2_NODATA, bigtiff="IF_SAFER")
-        tmp = dst_path.with_name(f"{dst_path.name}.{os.getpid()}.mask")
-        n_masked = 0
-        with rasterio.open(tmp, "w", **profile) as dst:
-            for row in range(0, src.height, block_rows):
-                win = rasterio.windows.Window(0, row, src.width, min(block_rows, src.height - row))
-                z = src.read(1, window=win)
-                if geoms:
-                    inside = rasterio.features.geometry_mask(
-                        geoms, (int(win.height), int(win.width)), rasterio.windows.transform(win, src.transform),
-                        invert=True,
-                    )
-                    n_masked += int((~inside).sum())
-                    z = np.where(inside, z, META_V2_NODATA).astype(z.dtype)
-                dst.write(z, 1, window=win)
-        total = src.width * src.height
-    tmp.replace(dst_path)
+    tmp = dst_path.with_name(f".{dst_path.name}.{os.getpid()}.{threading.get_ident()}.mask")
+    try:
+        with rasterio.open(src_path) as src:
+            geoms = [
+                transform_geom("EPSG:4326", src.crs, f["geometry"])
+                for f in footprints.get("features", [])
+                if f.get("geometry")
+            ]
+            profile = src.profile.copy()
+            profile.update(driver="GTiff", tiled=True, blockxsize=512, blockysize=512, compress="deflate",
+                           nodata=META_V2_NODATA, bigtiff="IF_SAFER")
+            n_masked = 0
+            with rasterio.open(tmp, "w", **profile) as dst:
+                for row in range(0, src.height, block_rows):
+                    win = rasterio.windows.Window(0, row, src.width, min(block_rows, src.height - row))
+                    z = src.read(1, window=win)
+                    if geoms:
+                        inside = rasterio.features.geometry_mask(
+                            geoms, (int(win.height), int(win.width)), rasterio.windows.transform(win, src.transform),
+                            invert=True,
+                        )
+                        n_masked += int((~inside).sum())
+                        z = np.where(inside, z, META_V2_NODATA).astype(z.dtype)
+                    dst.write(z, 1, window=win)
+            total = src.width * src.height
+        tmp.replace(dst_path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
     if n_masked:
         logger.info(f"Masked {100 * n_masked / total:.1f}% of {dst_path.name} outside the imagery footprints")
 
@@ -270,15 +313,19 @@ def ensure_tiled(path: Path, block: int = 512, threads: int = 8) -> None:
     path = Path(path)
     with rasterio.open(path) as src:
         bh, bw = src.block_shapes[0]
-        if bh >= block and bw >= block or src.width <= block:
+        if bool(src.profile.get("tiled", False)) or (bh >= block and bw >= block) or src.width <= block:
             return
         profile = {"tiled": True, "blockxsize": block, "blockysize": block,
                    "compress": (src.compression.value if src.compression else "deflate"),
                    "num_threads": str(threads), "bigtiff": "IF_SAFER"}
     logger.info(f"Re-tiling {path.name} ({bh}x{bw} px strips -> {block} px tiles), once per tile")
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.retile")
-    rasterio.shutil.copy(path, tmp, driver="GTiff", **profile)
-    tmp.replace(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.retile")
+    try:
+        rasterio.shutil.copy(path, tmp, driver="GTiff", **profile)
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -349,7 +396,13 @@ def build_vrt(paths: list[str], vrt_path: Path, extent: tuple | None = None) -> 
 """
     vrt_path = Path(vrt_path)
     vrt_path.parent.mkdir(parents=True, exist_ok=True)
-    vrt_path.write_text(xml)
+    tmp = vrt_path.with_name(f".{vrt_path.name}.{os.getpid()}.{threading.get_ident()}.part")
+    try:
+        tmp.write_text(xml)
+        tmp.replace(vrt_path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
     return vrt_path
 
 
@@ -424,7 +477,10 @@ def resolve_overlap(paths: list, overlap: str, out_dir: Path, bounds: tuple | No
         full = rasterio.windows.Window(0, 0, src.width, src.height)
         window = full
         if bounds is not None:
-            window = rasterio.windows.from_bounds(*bounds, transform=src.transform).round_offsets().round_lengths().intersection(full)
+            try:
+                window = rasterio.windows.from_bounds(*bounds, transform=src.transform).round_offsets().round_lengths().intersection(full)
+            except rasterio.errors.WindowError:
+                return []
         transform, crs = src.transform, src.crs
     out = []
     col0, row0, w, h = int(window.col_off), int(window.row_off), int(window.width), int(window.height)

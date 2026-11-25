@@ -38,7 +38,7 @@ verdance computes each metric per building and per census unit from standard geo
 pip install verdance
 ```
 
-Needs **Python 3.12+** and **Java 11–17** (Spark 3.5 runs on Java 17 at most). A [Docker image](https://sdgresearch.github.io/verdance/installation/#docker) bundles both. See [Installation](https://sdgresearch.github.io/verdance/installation/) for the details.
+Needs **Python 3.12 or 3.13** and **Java 11–17** (Spark 3.5 runs on Java 17 at most). A [Docker image](https://sdgresearch.github.io/verdance/installation/#docker) bundles both. See [Installation](https://sdgresearch.github.io/verdance/installation/) for the details.
 
 ## Quick start
 
@@ -112,7 +112,7 @@ import verdance
 
 cfg = verdance.load_config("mycity.yaml")
 verdance.run(cfg, "T3", buffer=50)
-merged = verdance.run(cfg, "Merge")
+merged = verdance.run(cfg, "Merge", t3_buffers=[50])
 ```
 
 See the [API reference](https://sdgresearch.github.io/verdance/api/).

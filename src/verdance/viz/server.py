@@ -9,7 +9,6 @@ Routes:
     /tiles/<layer>/<metric>/<z>/<x>/<y>.pbf   (metric "_" for none, e.g. trees)
 """
 
-import json
 import mimetypes
 import re
 import threading
@@ -20,6 +19,7 @@ from urllib.parse import unquote
 
 from loguru import logger
 
+from .store import _dumps_json
 from .tiles import MIN_ZOOM, TileStore
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -45,7 +45,8 @@ def _catalog_payload(store: TileStore) -> dict:
 
 
 def make_handler(store: TileStore) -> type[BaseHTTPRequestHandler]:
-    catalog = json.dumps(_catalog_payload(store), default=str).encode()
+    """Create a request handler class bound to `store`."""
+    catalog = _dumps_json(_catalog_payload(store)).encode()
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "verdance-viz"
@@ -58,6 +59,7 @@ def make_handler(store: TileStore) -> type[BaseHTTPRequestHandler]:
             if body:
                 self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Content-Type-Options", "nosniff")
             for k, v in (extra or {}).items():
                 self.send_header(k, v)
             self.end_headers()
@@ -65,36 +67,42 @@ def make_handler(store: TileStore) -> type[BaseHTTPRequestHandler]:
                 self.wfile.write(body)
 
         def _json(self, obj) -> None:
-            body = obj.encode() if isinstance(obj, str) else json.dumps(obj, default=str).encode()
+            body = obj.encode() if isinstance(obj, str) else _dumps_json(obj).encode()
             self._send(200, body)
 
         def do_HEAD(self):
             self.do_GET()
 
         def do_GET(self):
-            path = unquote(self.path.split("?", 1)[0])
+            raw_path = self.path.split("?", 1)[0]
             try:
-                if m := _TILE.match(path):
-                    self._tile(*m.groups())
-                elif path == "/api/catalog":
+                if "\x00" in unquote(raw_path):
+                    return self._send(400)
+                if m := _TILE.match(raw_path):
+                    layer, metric, z, x, y = m.groups()
+                    self._tile(unquote(layer), unquote(metric), z, x, y)
+                elif raw_path == "/api/catalog":
                     self._send(200, catalog)
-                elif m := _STATS.match(path):
-                    stats = store.stats(*m.groups())
+                elif m := _STATS.match(raw_path):
+                    layer, metric = (unquote(g) for g in m.groups())
+                    stats = store.stats(layer, metric)
                     self._json(stats) if stats is not None else self._send(404)
-                elif m := _FEATURE.match(path):
-                    layer, fid = m.groups()
+                elif m := _FEATURE.match(raw_path):
+                    layer, fid = (unquote(g) for g in m.groups())
                     if layer not in store.meta["layers"]:
                         return self._send(404)
                     feature = store.feature(layer, fid)
                     self._json(feature) if feature is not None else self._send(404)
                 else:
-                    self._static(path)
+                    self._static(unquote(raw_path))
             except KeyError:
                 self._send(404)
-            except BrokenPipeError:
+            except ValueError:
+                self._send(400)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
             except Exception as e:  # keep serving other requests
-                logger.exception(f"viz: error serving {path}: {e}")
+                logger.exception(f"viz: error serving {raw_path}: {e}")
                 self._send(500)
 
         def _tile(self, layer, metric, z, x, y):
@@ -127,12 +135,16 @@ def serve(store: TileStore, host: str = "127.0.0.1", port: int = 8765, open_brow
     httpd.daemon_threads = True
     url = f"http://{'localhost' if host in ('127.0.0.1', '0.0.0.0') else host}:{httpd.server_address[1]}/"
     logger.info(f"verdance viz running at {url} (Ctrl+C to stop)")
+    timer = None
     if open_browser:
-        threading.Timer(0.5, webbrowser.open, [url]).start()
+        timer = threading.Timer(0.5, webbrowser.open, [url])
+        timer.start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         logger.info("viz: stopped")
     finally:
+        if timer is not None:
+            timer.cancel()
         httpd.server_close()
         store.close()

@@ -11,6 +11,7 @@ import json
 import math
 import os
 import re
+import threading
 from dataclasses import asdict
 from pathlib import Path
 
@@ -42,9 +43,24 @@ def connect(path: Path | str, read_only: bool = False) -> duckdb.DuckDBPyConnect
     return con
 
 
+def _sanitize_json(obj):
+    """Replace non-finite floats (NaN/Inf) with None recursively so strict JSON serialisation succeeds."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _sanitize_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_json(v) for v in obj]
+    return obj
+
+
+def _dumps_json(obj) -> str:
+    return json.dumps(_sanitize_json(obj), allow_nan=False, default=str)
+
+
 def unit_table(layer_name: str) -> str:
     """DuckDB table name holding a geo level's units, derived from the layer name."""
-    return "units_" + re.sub(r"\W", "_", layer_name.lower())
+    return "units_" + re.sub(r"[^a-z0-9_]", "_", layer_name.lower())
 
 
 def fingerprint(catalog: Catalog, include_trees: bool) -> str:
@@ -158,7 +174,15 @@ def _build_buildings(con: duckdb.DuckDBPyConnection, catalog: Catalog) -> list[s
         joins += f" LEFT JOIN read_parquet({_sql_str(overlay)}) o ON CAST(o.{BUILDING_KEY} AS VARCHAR) = g.id"
         # and their names, when columns.geo_level_names says where they are
         for i, u in enumerate(u for u in catalog.unit_layers if u.overlay == overlay and u.name_col):
-            names = f"(SELECT DISTINCT CAST({_ident(u.name)} AS VARCHAR) AS c, CAST({_ident(u.name_col)} AS VARCHAR) AS n FROM read_parquet({_sql_str(u.boundaries)}))"
+            b_rel = f"read_parquet({_sql_str(u.boundaries)})"
+            b_cols = set(con.sql(f"SELECT * FROM {b_rel} LIMIT 0").columns)
+            if u.name_col not in b_cols:
+                continue
+            names = (
+                f"(SELECT CAST({_ident(u.name)} AS VARCHAR) AS c, "
+                f"any_value(CAST({_ident(u.name_col)} AS VARCHAR)) AS n "
+                f"FROM {b_rel} WHERE {_ident(u.name)} IS NOT NULL GROUP BY 1)"
+            )
             sel += f", nm{i}.n AS {_ident(NAME_PREFIX + u.name)}"
             joins += f" LEFT JOIN {names} nm{i} ON nm{i}.c = CAST(o.{_ident(u.name)} AS VARCHAR)"
     con.execute(f"""
@@ -172,7 +196,7 @@ def _build_buildings(con: duckdb.DuckDBPyConnection, catalog: Catalog) -> list[s
             con, "buildings", catalog.building_sources,
             f"SELECT CAST({BUILDING_KEY} AS VARCHAR) AS id, * FROM read_parquet({_sql_str(overlay)})", levels,
         )
-    metrics = [m for _, cols in views for m in cols]
+    metrics = list(dict.fromkeys(m for _, cols in views for m in cols))
     # how many of 3 / 30 / 300 a building meets, so the combined rule can be shown as a gradient;
     # once for the rule's own "3" and once per "3" metric Merge evaluated
     for col, three in [(CRITERIA_MET, "meets_3"), *((f"{CRITERIA_MET}_{m}", f"meets_3_{m}") for m in T3_METRICS)]:
@@ -262,11 +286,20 @@ def _build_units(con: duckdb.DuckDBPyConnection, catalog: Catalog, layer: UnitLa
     return metrics
 
 
-def _tree_crs(con: duckdb.DuckDBPyConnection, path: Path, fallback: str) -> str:
-    rel = f"read_parquet({_sql_str(path)})" if path.suffix.lower() in (".parquet", ".geoparquet") else f"ST_Read({_sql_str(path)})"
-    geom_col = "geometry" if rel.startswith("read_parquet") else "geom"
+def _geom_column(con: duckdb.DuckDBPyConnection, relation: str, default: str) -> str:
+    """Detect the GEOMETRY-typed column of a DuckDB relation, falling back to `default`."""
+    for name, dtype, *_ in con.execute(f"DESCRIBE SELECT * FROM {relation}").fetchall():
+        if str(dtype).upper().startswith("GEOMETRY"):
+            return name
+    return default
+
+
+def _tree_crs(con: duckdb.DuckDBPyConnection, path: Path, fallback: str, geom_col: str | None = None) -> str:
+    is_parquet = path.suffix.lower() in (".parquet", ".geoparquet")
+    rel = f"read_parquet({_sql_str(path)})" if is_parquet else f"ST_Read({_sql_str(path)})"
+    geom_col = geom_col or _geom_column(con, rel, "geometry" if is_parquet else "geom")
     crs = _source_crs(con, rel, geom_col, "")
-    if not crs and not rel.startswith("read_parquet"):
+    if not crs and not is_parquet:
         import pyogrio
 
         crs = pyogrio.read_info(path).get("crs") or ""
@@ -276,13 +309,15 @@ def _tree_crs(con: duckdb.DuckDBPyConnection, path: Path, fallback: str) -> str:
 def _build_trees(con: duckdb.DuckDBPyConnection, catalog: Catalog) -> dict:
     """Tree points in Web Mercator with a crown radius (m) and height when known."""
     trees = catalog.trees
-    parts = []
+    con.execute(
+        "CREATE TABLE trees (geom GEOMETRY, minx DOUBLE, miny DOUBLE, maxx DOUBLE, maxy DOUBLE, radius_m DOUBLE, height DOUBLE)"
+    )
     for path in trees.paths:
         is_parquet = path.suffix.lower() in (".parquet", ".geoparquet")
         rel = f"read_parquet({_sql_str(path)})" if is_parquet else f"ST_Read({_sql_str(path)})"
-        geom_col = "geometry" if is_parquet else "geom"
+        geom_col = _geom_column(con, rel, "geometry" if is_parquet else "geom")
         cols = {c.lower(): c for c in con.sql(f"SELECT * FROM {rel} LIMIT 0").columns}
-        src_crs = _tree_crs(con, path, catalog.crs)
+        src_crs = _tree_crs(con, path, catalog.crs, geom_col=geom_col)
         # areas are measured in the study-area CRS (metres) even when the file is geographic
         local = f"ST_Transform({_ident(geom_col)}, {_sql_str(src_crs)}, {_sql_str(catalog.crs)}, always_xy := true)"
         area_col = cols.get(trees.area_col.lower())
@@ -292,12 +327,16 @@ def _build_trees(con: duckdb.DuckDBPyConnection, catalog: Catalog) -> dict:
         )
         height_col = cols.get(trees.height_col.lower())
         height = f"CAST({_ident(height_col)} AS DOUBLE)" if height_col else "CAST(NULL AS DOUBLE)"
-        parts.append(f"""
-            SELECT {_to_mercator('ST_Centroid(g)', catalog.crs)} AS geom,
-                   round(sqrt(CASE WHEN a > 0 THEN a END / pi()), 2) AS radius_m, {height} AS height
-            FROM (SELECT *, {area} AS a FROM (SELECT {local} AS g, * EXCLUDE ({_ident(geom_col)}) FROM {rel})) WHERE g IS NOT NULL
+        con.execute(f"""
+            INSERT INTO trees
+            SELECT geom, ST_X(geom) AS minx, ST_Y(geom) AS miny, ST_X(geom) AS maxx, ST_Y(geom) AS maxy, radius_m, height
+            FROM (
+                SELECT {_to_mercator('ST_Centroid(g)', catalog.crs)} AS geom,
+                       round(sqrt(CASE WHEN a > 0 THEN a END / pi()), 2) AS radius_m, {height} AS height
+                FROM (SELECT *, {area} AS a FROM (SELECT {local} AS g, * EXCLUDE ({_ident(geom_col)}) FROM {rel}))
+                WHERE g IS NOT NULL
+            )
         """)
-    con.execute(f"CREATE TABLE trees AS SELECT geom, ST_X(geom) AS minx, ST_Y(geom) AS miny, ST_X(geom) AS maxx, ST_Y(geom) AS maxy, radius_m, height FROM ({' UNION ALL '.join(parts)})")
     _hilbert_order(con, "trees")
     has_radius, has_height = con.execute("SELECT count(radius_m) > 0, count(height) > 0 FROM trees").fetchone()
     return {"count": con.execute("SELECT count(*) FROM trees").fetchone()[0], "sized": bool(has_radius), "has_height": bool(has_height)}
@@ -402,8 +441,11 @@ def study_summary(con: duckdb.DuckDBPyConnection, catalog: Catalog, layers: dict
     medians[1:1] = [catalog.rule_gradients.get(f"meets_3_{m}") for m in T3_METRICS]
     for metric in dict.fromkeys(m for m in medians if m in building_metrics):
         if metric:
-            median = con.execute(f"SELECT median({_ident(metric)}) FROM buildings").fetchone()[0]
-            summary["medians"].append(asdict(describe(metric)) | {"value": median})
+            col = _ident(metric)
+            median = con.execute(
+                f"SELECT median({col}) FILTER (WHERE {col} IS NOT NULL AND isfinite(CAST({col} AS DOUBLE))) FROM buildings"
+            ).fetchone()[0]
+            summary["medians"].append(asdict(describe(metric)) | {"value": _sanitize_json(median)})
 
     summary["canopy_cover"] = _study_canopy(con, catalog)
     return summary
@@ -438,10 +480,10 @@ def _study_canopy(con: duckdb.DuckDBPyConnection, catalog: Catalog) -> dict | No
                 SELECT 100 * sum(cc / 100 * tp) / sum(tp), count(*)
                 FROM (SELECT {key}, any_value(canopy_cover) AS cc, any_value(total_pixels) AS tp
                       FROM {_reader(src)} WHERE {key} IS NOT NULL GROUP BY {key})
-                WHERE cc IS NOT NULL AND tp > 0
+                WHERE cc IS NOT NULL AND isfinite(CAST(cc AS DOUBLE)) AND tp > 0 AND isfinite(CAST(tp AS DOUBLE))
             """).fetchone()
-            if row[0] is not None:
-                return {"value": row[0], "units": row[1], "layer": layer.label}
+            if row[0] is not None and math.isfinite(row[0]):
+                return {"value": float(row[0]), "units": row[1], "layer": layer.label}
     return None
 
 
@@ -451,6 +493,8 @@ def _source_columns(con: duckdb.DuckDBPyConnection, src: Source) -> list[str]:
 
 def _lonlat_bounds(con: duckdb.DuckDBPyConnection) -> list[float]:
     minx, miny, maxx, maxy = con.execute("SELECT min(minx), min(miny), max(maxx), max(maxy) FROM buildings").fetchone()
+    if minx is None:
+        return [-180.0, -85.0, 180.0, 85.0]
     r = 6378137.0
 
     def lon(x):
@@ -464,9 +508,12 @@ def _lonlat_bounds(con: duckdb.DuckDBPyConnection) -> list[float]:
 
 def build_store(catalog: Catalog, path: Path, include_trees: bool = True) -> None:
     """Write the store to a temp file, then move it into place (a crashed build leaves no half store)."""
-    tmp = path.with_suffix(".building.duckdb")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.building.duckdb")
     tmp.unlink(missing_ok=True)
     con = connect(tmp)
+    ok = False
     try:
         logger.info("viz: loading buildings and building metrics")
         building_metrics = _build_buildings(con, catalog)
@@ -490,7 +537,7 @@ def build_store(catalog: Catalog, path: Path, include_trees: bool = True) -> Non
         con.execute("CREATE TABLE metric_stats (layer VARCHAR, metric VARCHAR, stats JSON)")
         for name, info in layers.items():
             for m in info["metrics"]:
-                con.execute("INSERT INTO metric_stats VALUES (?, ?, ?)", [name, m, json.dumps(metric_stats(con, info["table"], m))])
+                con.execute("INSERT INTO metric_stats VALUES (?, ?, ?)", [name, m, _dumps_json(metric_stats(con, info["table"], m))])
 
         # per layer: Merge's unit table reuses building metric names (tree_count_50m, ...)
         module_of = {"buildings": {m: s.module for s in catalog.building_sources for m in s.metrics}}
@@ -512,10 +559,14 @@ def build_store(catalog: Catalog, path: Path, include_trees: bool = True) -> Non
             "summary": study_summary(con, catalog, layers, trees, parks),
         }
         con.execute("CREATE TABLE meta (key VARCHAR PRIMARY KEY, value JSON)")
-        con.executemany("INSERT INTO meta VALUES (?, ?)", [[k, json.dumps(v)] for k, v in meta.items()])
+        con.executemany("INSERT INTO meta VALUES (?, ?)", [[k, _dumps_json(v)] for k, v in meta.items()])
         con.execute("CHECKPOINT")
+        ok = True
     finally:
         con.close()
+        if not ok:
+            tmp.unlink(missing_ok=True)
+            tmp.with_suffix(".duckdb.wal").unlink(missing_ok=True)
     os.replace(tmp, path)
     tmp.with_suffix(".duckdb.wal").unlink(missing_ok=True)
 

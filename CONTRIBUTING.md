@@ -113,10 +113,11 @@ tidy so adopting `ruff format` and import sorting later is painless.
 
 Releases are published to PyPI by the `release.yml` workflow when a `v*` tag is
 pushed, using PyPI Trusted Publishing (no stored token). Bump `__version__` in
-`src/verdance/__init__.py`, update `CHANGELOG.md`, then tag:
+`src/verdance/__init__.py`, update `version` / `date-released` in `CITATION.cff`
+and `CHANGELOG.md`, then tag:
 
 ```bash
-git tag -a v0.3.1 -m "verdance 0.3.1" && git push upstream v0.3.1
+git tag -a v<version> -m "verdance <version>" && git push upstream v<version>
 ```
 
 The Trusted Publisher must be configured once on PyPI before the first tagged

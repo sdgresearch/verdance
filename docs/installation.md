@@ -53,12 +53,14 @@ GEE_PROJECT_NAME=my-gee-project                # Earth Engine project when the c
 | Variable | Meaning |
 |---|---|
 | `JAVA_HOME` | The Java 11–17 installation Spark runs on. `JDK_HOME` takes precedence: an absolute path, or the name of a JDK directory under `~/.jdk/` (the layout of the [install-jdk](https://pypi.org/project/install-jdk/) package) |
-| `SPARK_DRIVER_MEMORY` | Spark's heap (e.g. `16g`). Spark runs locally, so this is the memory for all its work. Default: three quarters of the machine's RAM, at most `64g` |
+| `SPARK_DRIVER_MEMORY` | Spark's heap (e.g. `16g`). Spark runs locally, so this is the memory for all its work. Default: three quarters of the machine's RAM (respecting container cgroup limits), at most `64g` |
+| `SPARK_EXECUTOR_MEMORY` | Spark executor heap (defaults to `SPARK_DRIVER_MEMORY`) |
 | `GEE_PROJECT_NAME` | Earth Engine project used when the config has no `gee_project` |
-| `VERDANCE_CACHE_DIR` | Shared download cache for canopy tiles, Earth Engine rasters and OSM responses |
+| `VERDANCE_CACHE_DIR` | Shared download cache for canopy tiles, Earth Engine heights/terrain and OSM responses |
 | `VERDANCE_IVY_DIR` | Where the Sedona/Spark jars are cached |
 | `VERDANCE_DUCKDB_EXTENSIONS` | Where the DuckDB spatial extension is cached |
-| `VERDANCE_SPARK_MASTER` | Spark master URL; defaults to `local[*]` |
+| `VERDANCE_SPARK_MASTER` | Spark master URL (alias: `SPARK_MASTER`); defaults to `local[*]` |
+| `VERDANCE_NO_DOTENV` | Set to `1` to skip loading `.env` files at startup |
 | `TMPDIR` | Temporary files, including Spark shuffle and spill (`SPARK_LOCAL_DIRS` overrides it for shuffle files) |
 
 Where each of these lands by default is covered in

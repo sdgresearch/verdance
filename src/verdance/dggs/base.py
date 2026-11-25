@@ -43,17 +43,18 @@ def _finalize_boundaries(
         ),
         ranked AS (
             SELECT c.cell, c.geometry, {p_cols},
-                   ST_Intersects(c.geometry, p.unit_geometry) AS overlaps_unit,
                    ROW_NUMBER() OVER (
                        PARTITION BY c.cell
                        ORDER BY ST_Contains(p.unit_geometry, ST_Centroid(c.geometry)) DESC,
-                                ST_Area(ST_Intersection(c.geometry, p.unit_geometry)) DESC
+                                ST_Area(ST_Intersection(c.geometry, p.unit_geometry)) DESC,
+                                {p_cols}
                    ) AS rn
             FROM cells c JOIN {pairs_view} p ON c.cell = p.cell
+            WHERE ST_Intersects(c.geometry, p.unit_geometry)
         )
         SELECT cell AS {col_name}, {cols},
                ST_Area(geometry) / 1000000 AS area, geometry
-        FROM ranked WHERE rn = 1 AND overlaps_unit
+        FROM ranked WHERE rn = 1
         """
     )
     pdf = sdf.toPandas()
@@ -74,10 +75,12 @@ class DGGS(abc.ABC):
 
     def column_name(self, resolution: int) -> str:
         """Column name holding the cell id at a given resolution."""
+        self.validate_resolution(resolution)
         return f"{self.name}_{resolution}"
 
     def validate_resolution(self, resolution: int) -> None:
-        if not (isinstance(resolution, int) and self.min_resolution <= resolution <= self.max_resolution):
+        """Validate that `resolution` is an integer within this system's supported range."""
+        if isinstance(resolution, bool) or not (isinstance(resolution, int) and self.min_resolution <= resolution <= self.max_resolution):
             raise ValueError(
                 f"{self.name} {self.resolution_term} must be an integer between "
                 f"{self.min_resolution} and {self.max_resolution}, got {resolution!r}"
@@ -126,25 +129,33 @@ class SedonaSQLDGGS(DGGS):
         """SQL expression: EPSG:4326 polygon of a raw cell id."""
 
     def build_boundaries(self, sedona, census_gdf, resolution, geo_levels, crs):
+        """Build the grid boundary table using native Sedona SQL cell functions."""
+        from ..utils.data_processing import sql_str
+
         self.validate_resolution(resolution)
         logger.info(f"Building {self.name} grid at {self.resolution_term} {resolution}")
         cols = ", ".join(geo_levels)
+        crs_sql = sql_str(crs)
         sedona.createDataFrame(census_gdf[geo_levels + ["geometry"]]) \
             .createOrReplaceTempView("dggs_census_src")
-        geom_4326 = f"ST_Transform(geometry, '{crs}', 'EPSG:4326')"
-        sedona.sql(
-            f"""
-            SELECT {cols}, geometry AS unit_geometry,
-                   {self.cell_id_str_sql('cell')} AS cell,
-                   ST_Transform({self.cell_geom_sql('cell')}, 'EPSG:4326', '{crs}') AS cell_geometry
-            FROM (
-                SELECT {cols}, geometry,
-                       explode({self.cell_ids_sql(geom_4326, resolution)}) AS cell
-                FROM dggs_census_src
-            )
-            """
-        ).createOrReplaceTempView("dggs_pairs")
-        return _finalize_boundaries(sedona, "dggs_pairs", self.column_name(resolution), geo_levels, crs)
+        try:
+            geom_4326 = f"ST_Transform(geometry, {crs_sql}, 'EPSG:4326')"
+            sedona.sql(
+                f"""
+                SELECT {cols}, geometry AS unit_geometry,
+                       {self.cell_id_str_sql('cell')} AS cell,
+                       ST_Transform({self.cell_geom_sql('cell')}, 'EPSG:4326', {crs_sql}) AS cell_geometry
+                FROM (
+                    SELECT {cols}, geometry,
+                           explode({self.cell_ids_sql(geom_4326, resolution)}) AS cell
+                    FROM dggs_census_src
+                )
+                """
+            ).createOrReplaceTempView("dggs_pairs")
+            return _finalize_boundaries(sedona, "dggs_pairs", self.column_name(resolution), geo_levels, crs)
+        finally:
+            sedona.catalog.dropTempView("dggs_census_src")
+            sedona.catalog.dropTempView("dggs_pairs")
 
 
 class PythonDGGS(DGGS):
@@ -157,6 +168,7 @@ class PythonDGGS(DGGS):
         """(cell id, EPSG:4326 polygon) pairs covering a geometry; may over-include."""
 
     def build_boundaries(self, sedona, census_gdf, resolution, geo_levels, crs):
+        """Build the grid boundary table by generating candidate cells in Python."""
         self.validate_resolution(resolution)
         logger.info(f"Building {self.name} grid at {self.resolution_term} {resolution}")
         units = census_gdf[geo_levels + ["geometry"]]
@@ -164,20 +176,29 @@ class PythonDGGS(DGGS):
 
         rows = []
         for (_, unit), geom_4326 in zip(units.iterrows(), units_4326.geometry):
+            if geom_4326 is None or geom_4326.is_empty:
+                continue
             for cell_id, cell_poly in self.cells_covering(geom_4326, resolution):
                 rows.append([unit[c] for c in geo_levels] + [cell_id, unit.geometry.wkb, cell_poly])
+        col_name = self.column_name(resolution)
+        if not rows:
+            raise ValueError(f"No {col_name} cells overlap the study area.")
         pairs = pd.DataFrame(rows, columns=geo_levels + ["cell", "unit_wkb", "cell_poly"])
         # Reproject the cell polygons in one pass, then ship both geometries as WKB
         pairs["cell_wkb"] = gpd.GeoSeries(pairs.pop("cell_poly"), crs="EPSG:4326").to_crs(crs).to_wkb()
 
         sedona.createDataFrame(pairs).createOrReplaceTempView("dggs_pairs_raw")
-        cols = ", ".join(geo_levels)
-        sedona.sql(
-            f"""
-            SELECT {cols}, cell,
-                   ST_GeomFromWKB(unit_wkb) AS unit_geometry,
-                   ST_GeomFromWKB(cell_wkb) AS cell_geometry
-            FROM dggs_pairs_raw
-            """
-        ).createOrReplaceTempView("dggs_pairs")
-        return _finalize_boundaries(sedona, "dggs_pairs", self.column_name(resolution), geo_levels, crs)
+        try:
+            cols = ", ".join(geo_levels)
+            sedona.sql(
+                f"""
+                SELECT {cols}, cell,
+                       ST_GeomFromWKB(unit_wkb) AS unit_geometry,
+                       ST_GeomFromWKB(cell_wkb) AS cell_geometry
+                FROM dggs_pairs_raw
+                """
+            ).createOrReplaceTempView("dggs_pairs")
+            return _finalize_boundaries(sedona, "dggs_pairs", col_name, geo_levels, crs)
+        finally:
+            sedona.catalog.dropTempView("dggs_pairs_raw")
+            sedona.catalog.dropTempView("dggs_pairs")

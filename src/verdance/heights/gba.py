@@ -50,9 +50,12 @@ def list_tiles(ctx: HeightContext, project: str | None) -> list[str]:
 
 
 class GBAHeights(VectorHeightSource):
+    """GlobalBuildingAtlas (TUM) vector building heights fetched from GEE."""
+
     license = "CC BY-NC 4.0 (GlobalBuildingAtlas, TUM) — non-commercial use only"
 
     def fetch(self, buildings: gpd.GeoDataFrame, ctx: HeightContext) -> gpd.GeoDataFrame:
+        """Fetch overlapping GlobalBuildingAtlas polygons reprojected to the study-area CRS."""
         bounds = bounds_4326(buildings)
         tiles = tiles_for_bounds(list_tiles(ctx, self.cfg.gee_project), bounds)
         if not tiles:

@@ -1,6 +1,6 @@
 # Modules
 
-| Process | What it computes | Output (one CSV per geo code) |
+| Process | What it computes | Output |
 |---|---|---|
 | `Trees` | Segments individual tree crowns from a canopy height model (local CHM tiles or the global Meta/WRI 1 m CHM) into `data.trees_dir`, for T3/Tree_count/Visibility | `trees_<geo_code>.parquet`: `treeID`, `height`, `area`, `top_x`, `top_y`, crown geometry |
 | `T3` | Trees (height and area strictly above `--tree_height`/`--tree_area`) whose centroid lies within `--buffer` metres of each building | `building_id`, `tree_count_<buffer>m`, sub-geo code |
@@ -8,10 +8,10 @@
 | `T30_buildings` | Canopy cover % within `--buffer` metres of each building (distributed Sedona `RS_ZonalStats` for raster sources), same canopy sources as T30 | `building_id`, `tree_pixels`, `total_pixels`, `canopy_cover` |
 | `T300` | Road-network and Euclidean distance from each building to the nearest park | `building_id`, distances, closest park ids, sub-geo code |
 | `Tree_count` | Total tree count per sub-geo unit, each tree counted once in the unit containing its centroid (no size filter, unlike T3) | sub-geo code, `tree_count` |
-| `Heights` | A height for every building footprint from an ordered chain of sources (footprint attributes, GlobalBuildingAtlas, UT-GLOBUS, Open Buildings 2.5D Temporal, GHS-BUILT-H, local files) | `database/building_heights_<key>.parquet`: `building_height`, `height_source`, `height_quality` |
+| `Heights` | A height for every building footprint from an ordered chain of sources (footprint attributes, GlobalBuildingAtlas, UT-GLOBUS, Open Buildings 2.5D Temporal, GHS-BUILT-H, local files) | `database/building_heights_<key>.parquet`: `building_id`, `building_height`, `height_source`, `height_quality`, `height_res_m` |
 | `Visibility` *(optional)* | Trees within `--buffer` metres that can be seen from some window of each building, with buildings and trees blocking the view | `building_id`, `visible_trees`, `visible_trees_ground`, `candidate_trees`, `n_floors`, `building_height`, `height_source`, sub-geo code |
 | `Spectral` *(optional)* | Spectral indices (NDVI, NDWI, …) per sub-geo unit via Google Earth Engine: a per-pixel temporal composite over the date range (`--composite max`, the default, or `median`), then the spatial median over each unit | sub-geo code, one column per index |
-| `Merge` | Evaluates the 3-30-300 rule per building and consolidates all module outputs into `database/T3_30_300_spectral.parquet` | one row per geo unit (see [Merge](#merge-and-the-3-30-300-rule)) |
+| `Merge` | Evaluates the 3-30-300 rule per building and consolidates all module outputs into `database/T3_30_300_buildings.parquet` and `database/T3_30_300_spectral.parquet` | one row per building and one row per geo unit (see [Merge](#merge-and-the-3-30-300-rule)) |
 
 
 ## Usage
@@ -28,9 +28,11 @@ verdance run -c config.yaml -p Tree_count
 verdance run -c config.yaml -p Heights         # building heights (Visibility builds them if missing)
 verdance run -c config.yaml -p Visibility --buffer 50   # optional: trees in view
 verdance run -c config.yaml -p Spectral        # optional, needs GEE
-verdance run -c config.yaml -p Merge
-verdance viz -c config.yaml                    # interactive map, see [Visualising results](visualising.md)
+verdance run -c config.yaml -p Merge --t3_buffers 100 --rule_t3_buffer 100
+verdance viz -c config.yaml
 ```
+
+See [Visualising results](visualising.md) for the map controls and output layout.
 
 Useful options:
 
@@ -44,8 +46,9 @@ Useful options:
 - `--vis_engine raster|vector` — Visibility engine (default `visibility.engine`, i.e. `raster`; see [Tree visibility](#tree-visibility-visibility-optional))
 - `--low_threshold` / `--high_threshold` — canopy-height band in metres for T30/T30_buildings binarisation (default 3–60)
 - `--gee_scale` — download resolution in metres for the T30/T30_buildings GEE canopy source (default `1.0`; raise to e.g. `10` for faster, lighter downloads over large regions — canopy is still thresholded at native resolution and each coarse pixel stores its canopy fraction, so cover stays unbiased)
-- `--composite max|median` — Spectral temporal composite (default `max`)
+- `--composite max|median`, `--start_date`, `--end_date`, `--imagery_ee_path`, `--cloud_coverage`, `--spectral_indexes` — Spectral temporal composite, Sentinel-2 date window, Earth Engine collection, cloud filter and indices to compute
 - `--rule_t3_buffer`, `--rule_t3_metric`, `--rule_t30_buffer`, `--rule_distance` — how Merge evaluates the rule per building (see [Merge](#merge-and-the-3-30-300-rule))
+- `--log_level` — console log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`)
 
 ## Canopy cover source (T30, T30_buildings)
 
@@ -146,7 +149,7 @@ Since visibility only improves with height, each building–tree pair reduces to
 
 Two engines share these definitions:
 
-- **`raster`** (default) — casts the sightlines over a surface model on a `visibility.resolution` grid (1 m): buildings burned at their heights plus the vegetation, which is the canopy height model when one is configured (`data.chm_tiles_dir` or `tree_segmentation.source`; Meta's CHM is cleared on roofs, `mask_chm_buildings`) and the tree crowns at their heights otherwise (`vegetation: auto|chm|crowns`). A numba kernel visits every pixel each sightline crosses, in parallel (`--parallel --n_workers N` sets the threads, default 16); buildings are processed in `tile_size` tiles (2 km). It needs no Spark. Edges are only as sharp as the grid: a sightline that clips a building corner by less than a pixel may be judged differently from exact geometry (set `resolution: 0.5` to tighten).
+- **`raster`** (default) — casts the sightlines over a surface model on a `visibility.resolution` grid (1 m): buildings burned at their heights plus the vegetation, which is the canopy height model when one is configured (`data.chm_tiles_dir`, `data.meta_chm` or `tree_segmentation.source`; CHM pixels falling on roofs are cleared when `mask_chm_buildings` is true) and the tree crowns at their heights otherwise (`vegetation: auto|chm|crowns`). A numba kernel visits every pixel each sightline crosses, in parallel (`--parallel --n_workers N` sets the threads, default 16); buildings are processed in `tile_size` tiles (2 km). It needs no Spark. Edges are only as sharp as the grid: a sightline that clips a building corner by less than a pixel may be judged differently from exact geometry (set `resolution: 0.5` to tighten).
 - **`vector`** (`--vis_engine vector`) — the exact computation in Sedona SQL, intersecting every sightline with every footprint and crown polygon; a reference for small areas, writing `Visibility_vector/` so Merge never mixes engines. On the synthetic city both engines agree on 47 of 48 buildings (the other differs by one ground-floor tree, a sightline grazing a building corner); on three Cambridge output areas (312 buildings) they agree on `meets_3` for 99.7 % of buildings, with the raster engine seeing 2.5 % fewer trees on average, at ~1 s per area against ~50 s.
 
 Building heights come from the `Heights` chain (built on the first Visibility run when missing) and tree heights from `tree_height_col`. Visibility needs crowns in `data.trees_dir`, and by default reads terrain from Earth Engine (below): set `terrain.source: null` for flat ground without GEE.
@@ -183,7 +186,7 @@ These runs used flat ground and no context ring. With FABDEM terrain and the 100
 
 ## Merge and the 3-30-300 rule
 
-`Merge` accepts `--t3_buffers`, repeated once per buffer (e.g. `--t3_buffers 50 --t3_buffers 100`; default 10, 25, 50, 75 and 100), and combines whichever T3 buffer runs exist; Spectral, T30_buildings and Visibility outputs are included only if present. It aggregates to `--geo_level`, which for Merge defaults to the **second-finest** level of `columns.geo_levels` (the finest with a DGGS), reading sub-geo results at `--sub_geo_level` (default: finest).
+`Merge` accepts `--t3_buffers`, repeated once per buffer (e.g. `--t3_buffers 50 --t3_buffers 100`; default 10, 25, 50, 75 and 100), and combines every requested T3 buffer (each listed buffer must already have T3 CSVs); Spectral, T30_buildings and Visibility outputs are included only if present. It aggregates to `--geo_level`, which for Merge defaults to the **second-finest** level of `columns.geo_levels` (or the DGGS cell level, e.g. `h3_9`, when a DGGS is configured), reading sub-geo results at `--sub_geo_level` (default: finest).
 
 Per unit it reports means — `tree_count_<b>m`, `canopy_cover` (area-weighted), `park_distance_manhattan` (road network) and `park_distance_euclidean`, plus `building_canopy_cover_<b>m`, `visible_trees_<b>m` and `visible_trees_ground_<b>m` when available — and `total_trees`. With Visibility it also reports `share_visible_<b>m`: the % of the unit's building–tree pairs within the buffer where the tree is in view (Σ visible ÷ Σ candidates).
 
@@ -193,8 +196,8 @@ Because the rule is a test every home should pass, Merge also evaluates it **per
 - **30** — canopy cover of the building's sub-geo unit (the neighbourhood reading of the rule) is ≥ 30 %; with `--rule_t30_buffer N`, T30_buildings canopy within N metres of the building instead
 - **300** — distance to the nearest park is ≤ 300 m, straight-line by default (`--rule_distance euclidean`, as in the WHO guideline) or `network`
 
-A criterion with missing input is left null and excluded from that percentage; the combined rule is only evaluated where all three are known. T3 and Visibility counts are proxies for "seeing" trees: T3 counts trees near the building, Visibility checks line of sight.
+A criterion with missing input is left null and excluded from that percentage; the combined rule is only evaluated where all three are known. The one exception is the 300 m rule when `osm.fetch_buffer >= 300` (the 2 km default): a building with null park distance had no reachable park within the search buffer, so `meets_300` evaluates to `False` rather than null. T3 and Visibility counts are proxies for "seeing" trees: T3 counts trees near the building, Visibility checks line of sight.
 
 ## Per-building outputs
 
-Each building belongs to exactly one census unit — the one containing its representative point — and is output only by that unit's run, including buildings that straddle unit boundaries. Buildings whose representative point lies outside every unit are skipped. T3's default `sql` query path returns a row for every building, with `tree_count` 0 where no tree is in the buffer; `--query_method rdd` omits those buildings instead, and Merge fills them with 0. T300 keeps every building: with no reachable park within `osm.fetch_buffer` (default 2 km) its distances are null.
+Each building belongs to exactly one census unit — the one containing its representative point — and is output only by that unit's run, including buildings that straddle unit boundaries. Buildings whose representative point lies outside every unit are skipped. T3's default `sql` query path returns a row for every building, with `tree_count` 0 where no tree is in the buffer; `--query_method rdd` omits those buildings instead, and Merge fills them with 0. T300 keeps every building: with no reachable park within `osm.fetch_buffer` (default 2 km) its distances are null (which Merge evaluates as `meets_300 = False` whenever `osm.fetch_buffer >= 300`).

@@ -1,6 +1,6 @@
 """Canopy cover within a buffer of each building.
 
-The per-building counterpart of :mod:`verdance.t30`: the same canopy sources,
+The per-building counterpart of `verdance.t30`: the same canopy sources,
 reported for the neighbourhood of every footprint rather than per census unit.
 """
 
@@ -22,6 +22,7 @@ from .utils.data_processing import (
     find_overlapping_rasters,
     view_suffix,
     drop_geo_views,
+    write_csv_atomic,
 )
 
 RESULT_COLUMNS = ["building_id", "tree_pixels", "total_pixels", "canopy_cover"]
@@ -58,19 +59,20 @@ def get_canopy_cover_buildings_raster(
     # invalid format), sampling rows at 25/50/75% of tile height to catch
     # mid-file corruption cheaply, and fail loudly on CRS mismatches — a tile
     # in another CRS would silently miss every building in RS_Intersects.
+    expected_crs = CRS.from_epsg(epsg)
     valid_paths = []
     for path in chm_paths:
         try:
-            r = rxr.open_rasterio(path)
-            tile_epsg = r.rio.crs.to_epsg() if r.rio.crs is not None else None
-            if tile_epsg != epsg:
-                raise ValueError(
-                    f"Tile {path} is in EPSG:{tile_epsg} but the config CRS is "
-                    f"EPSG:{epsg} — reproject the tiles or fix cfg.crs"
-                )
-            n_rows = r.shape[1]
-            for frac in [0.25, 0.50, 0.75]:
-                r.isel(y=slice(int(n_rows * frac), int(n_rows * frac) + 1)).values
+            with rxr.open_rasterio(path) as r:
+                tile_crs = CRS.from_user_input(r.rio.crs) if r.rio.crs is not None else None
+                if tile_crs != expected_crs:
+                    raise ValueError(
+                        f"Tile {path} is in {tile_crs} but the config CRS is "
+                        f"EPSG:{epsg} — reproject the tiles or fix cfg.crs"
+                    )
+                n_rows = r.shape[1]
+                for frac in [0.25, 0.50, 0.75]:
+                    _ = r.isel(y=slice(int(n_rows * frac), int(n_rows * frac) + 1)).values
             valid_paths.append(str(path))
         except ValueError:
             raise
@@ -78,8 +80,7 @@ def get_canopy_cover_buildings_raster(
             logger.warning(f"Skipping unreadable tile {Path(path).name}: {e}")
 
     if not valid_paths:
-        logger.warning(f"No valid CHM tiles found for {geo_code}, returning empty result")
-        return pd.DataFrame(columns=RESULT_COLUMNS)
+        raise FileNotFoundError(f"No valid CHM tiles found for {geo_code}")
 
     logger.debug(f"Loading {len(valid_paths)}/{len(chm_paths)} valid CHM tiles into Sedona")
 
@@ -111,27 +112,10 @@ def get_canopy_cover_buildings_raster(
     """)
     binary_sdf.createOrReplaceTempView(f"binary_tiles_{sfx}")
 
-    from sedona.spark.utils.adapter import Adapter
-    from sedona.spark.core.enums import GridType, IndexType
-
     buildings_sdf = sedona.sql(
         f"SELECT building_id, ST_SetSRID(geometry, {epsg}) AS geometry FROM buildings_buffers_{sfx}"
     )
-    buildings_rdd = Adapter.toSpatialRdd(buildings_sdf, "geometry")
-    buildings_rdd.analyze()
-    # KDB-tree partitioning requires partitions <= records/2; cap for small datasets
-    default_parallelism = sedona.sparkContext.defaultParallelism
-    total = buildings_rdd.approximateTotalCount or 1
-    num_partitions = max(1, min(default_parallelism, total // 2))
-    buildings_rdd.spatialPartitioning(GridType.KDBTREE, num_partitions)
-    buildings_rdd.buildIndex(IndexType.QUADTREE, True)
-    buildings_partitioned_sdf = Adapter.toDf(buildings_rdd, ["building_id"], sedona)
-    # Adapter.toDf() strips SRID; re-apply so RS_Intersects matches the raster's CRS
-    buildings_partitioned_sdf = buildings_partitioned_sdf.selectExpr(
-        "building_id",
-        f"ST_SetSRID(geometry, {epsg}) AS geometry",
-    )
-    buildings_partitioned_sdf.createOrReplaceTempView(f"buildings_partitioned_{sfx}")
+    buildings_sdf.createOrReplaceTempView(f"buildings_partitioned_{sfx}")
 
     # 'sum' on the binary raster = tree pixels (canopy fraction for coarsened GEE
     # masks); 'count' on the raw raster = valid (non-nodata) pixels. allTouched
@@ -160,7 +144,11 @@ def get_canopy_cover_buildings_raster(
 
 
 def get_canopy_cover_buildings_vector(
-    sedona: SparkSession, geo_code: str, trees_gdf: gpd.GeoDataFrame
+    sedona: SparkSession,
+    geo_code: str,
+    trees_gdf: gpd.GeoDataFrame,
+    low_threshold: float | None = None,
+    high_threshold: float | None = None,
 ) -> pd.DataFrame:
     """Per-building canopy cover (%) from tree vectors via a Sedona spatial join.
 
@@ -178,34 +166,52 @@ def get_canopy_cover_buildings_vector(
     """
     sfx = view_suffix(geo_code)
 
-    polygonal = set(trees_gdf.geometry.geom_type.unique()) <= {"Polygon", "MultiPolygon"}
-    cols = ["geometry"] + (["tree_area"] if "tree_area" in trees_gdf.columns else [])
+    result_df = sedona.sql(f"""
+        SELECT building_id, ST_Area(geometry) AS _area
+        FROM buildings_buffers_{sfx}
+    """).toPandas()
+    if result_df.empty:
+        return pd.DataFrame(columns=RESULT_COLUMNS)
+
+    trees_clean = trees_gdf[trees_gdf.geometry.notna() & ~trees_gdf.geometry.is_empty]
+    if "tree_height" in trees_clean.columns:
+        if low_threshold is not None:
+            trees_clean = trees_clean[trees_clean["tree_height"] >= low_threshold]
+        if high_threshold is not None:
+            trees_clean = trees_clean[trees_clean["tree_height"] <= high_threshold]
+
+    if trees_clean.empty:
+        result_df["tree_pixels"] = 0.0
+        result_df["total_pixels"] = result_df["_area"].round()
+        result_df["canopy_cover"] = 0.0
+        return result_df[RESULT_COLUMNS]
+
+    polygonal = set(trees_clean.geometry.geom_type.unique()) <= {"Polygon", "MultiPolygon"}
+    cols = ["geometry"] + (["tree_area"] if "tree_area" in trees_clean.columns else [])
     if not polygonal and "tree_area" not in cols:
         raise ValueError(
             "Non-polygon trees need a tree_area column (columns.tree_area_col) "
             "to compute canopy cover per building"
         )
-    sedona.createDataFrame(trees_gdf[cols]).createOrReplaceTempView(f"t30b_trees_{sfx}")
+    sedona.createDataFrame(trees_clean[cols]).createOrReplaceTempView(f"t30b_trees_{sfx}")
 
     canopy_expr = (
         "ST_Area(ST_Intersection(FIRST(b.geometry), ST_Union_Aggr(t.geometry)))"
         if polygonal else "SUM(t.tree_area)"
     )
     canopy_df = sedona.sql(f"""
-        SELECT b.building_id, ROUND({canopy_expr}, 3) AS tree_pixels
+        SELECT b.building_id, {canopy_expr} AS _tree_area
         FROM buildings_buffers_{sfx} b
         JOIN t30b_trees_{sfx} t ON ST_Intersects(b.geometry, t.geometry)
         GROUP BY b.building_id
     """).toPandas()
-    result_df = sedona.sql(f"""
-        SELECT building_id, ROUND(ST_Area(geometry)) AS total_pixels
-        FROM buildings_buffers_{sfx}
-    """).toPandas()
     result_df = result_df.merge(canopy_df, on="building_id", how="left")
-    result_df["tree_pixels"] = result_df["tree_pixels"].fillna(0.0)
-
-    result_df["canopy_cover"] = (100.0 * result_df["tree_pixels"] / result_df["total_pixels"]).round(3)
-    return result_df
+    result_df["_tree_area"] = result_df["_tree_area"].fillna(0.0)
+    result_df = result_df[result_df["_area"] > 0].copy()
+    result_df["tree_pixels"] = result_df["_tree_area"].round(3)
+    result_df["total_pixels"] = result_df["_area"].round()
+    result_df["canopy_cover"] = (100.0 * result_df["_tree_area"] / result_df["_area"]).round(3)
+    return result_df[RESULT_COLUMNS]
 
 
 def process_geo_code(
@@ -248,11 +254,6 @@ def process_geo_code(
         get_geometries(sedona, geo_level, geo_code, dissolve=True)
         filter_buffer_geometries(sedona, geo_level, geo_code, "buildings", buffer, id_col="building_id")
         sfx = view_suffix(geo_code)
-        if not buffer:
-            # buffer 0 = footprint only; filter_buffer_geometries skips the buffers view
-            sedona.sql(
-                f"SELECT geometry, building_id FROM geo_buildings_{sfx}"
-            ).createOrReplaceTempView(f"buildings_buffers_{sfx}")
 
         # Buffered buildings extend up to `buffer` metres past the geo boundary,
         # so canopy tiles/trees must be selected against the widened boundary too
@@ -264,6 +265,20 @@ def process_geo_code(
 
         if cfg.data.chm_tiles_dir:
             chm_paths = find_overlapping_rasters(search_gdf, Path(cfg.data.chm_tiles_dir), pattern=cfg.data.chm_pattern)
+            if not chm_paths:
+                raise FileNotFoundError(
+                    f"No CHM tiles in {cfg.data.chm_tiles_dir} (pattern {cfg.data.chm_pattern!r}) overlap {geo_code}"
+                )
+            # Validate tile CRS before compositing so mixed-CRS tiles fail loudly
+            expected_crs = CRS.from_epsg(epsg)
+            for p in chm_paths:
+                with rxr.open_rasterio(p) as r:
+                    tile_crs = CRS.from_user_input(r.rio.crs) if r.rio.crs is not None else None
+                    if tile_crs != expected_crs:
+                        raise ValueError(
+                            f"Tile {p} is in {tile_crs} but the config CRS is "
+                            f"EPSG:{epsg} — reproject the tiles or fix cfg.crs"
+                        )
             # pixel counts are summed per tile, so overlapping tiles (e.g. survey
             # years) are first composited into non-overlapping chunks
             from .optional.chm_sources import resolve_overlap
@@ -300,7 +315,9 @@ def process_geo_code(
 
         elif cfg.data.trees_dir:
             trees_gdf = load_trees_gdf(Path(cfg.data.trees_dir), search_gdf, cfg)
-            result_df = get_canopy_cover_buildings_vector(sedona, geo_code, trees_gdf)
+            result_df = get_canopy_cover_buildings_vector(
+                sedona, geo_code, trees_gdf, low_threshold=low_threshold, high_threshold=high_threshold
+            )
 
         else:
             raise ValueError(
@@ -309,7 +326,7 @@ def process_geo_code(
             )
 
         result_df = result_df[RESULT_COLUMNS]
-        result_df.to_csv(out_path, index=False)
+        write_csv_atomic(result_df, out_path)
 
         end_time = time.time()
         logger.info(f"T30_buildings: {geo_code} — {len(result_df)} records in {end_time - start_time:.2f}s")

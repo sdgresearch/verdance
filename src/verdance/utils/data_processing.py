@@ -4,9 +4,11 @@ Includes the SQL literal quoting every module uses to build Sedona queries
 safely, geometry filtering helpers, and the single-part file writers.
 """
 
+import hashlib
+import os
 import re
-import shutil
 import tempfile
+import threading
 import pandas as pd
 from loguru import logger
 import geopandas as gpd
@@ -16,12 +18,32 @@ from pyspark.sql.dataframe import DataFrame
 
 
 def view_suffix(geo_code: str) -> str:
-    """Sanitize a geo code into a valid Spark temp-view name suffix.
+    """Sanitise a geo code into a valid, collision-free ASCII Spark temp-view suffix.
 
     Per-geo views are suffixed with this so parallel workers processing
-    different geo codes never overwrite each other's views.
+    different geo codes never overwrite each other's views. Non-ASCII or
+    punctuation-containing codes append a short hash so distinct codes like
+    `"A-1"` and `"A 1"` or accented names like `"Bogotá"` stay valid and unique.
     """
-    return re.sub(r"\W", "_", str(geo_code))
+    raw = str(geo_code)
+    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", raw)
+    if cleaned != raw:
+        digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+        return f"{cleaned}_{digest}"
+    return cleaned
+
+
+def write_csv_atomic(df: pd.DataFrame, path: Path) -> None:
+    """Write a DataFrame to CSV via a unique sibling temp file and atomic rename."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.part")
+    try:
+        df.to_csv(tmp, index=False)
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
 
 
 def sql_str(value) -> str:
@@ -84,60 +106,107 @@ def load_trees_gdf(
     if trees_dir.is_file():
         suffix = trees_dir.suffix.lower()
         trees_gdf = gpd.read_parquet(trees_dir) if suffix in (".parquet", ".geoparquet") else gpd.read_file(trees_dir)
+    elif not trees_dir.exists():
+        raise FileNotFoundError(f"Tree path does not exist: {trees_dir}")
     else:
         paths = find_overlapping_files(geo_boundary_gdf, trees_dir, pattern="*.gpkg")
         paths += find_overlapping_files(geo_boundary_gdf, trees_dir, pattern="*.parquet")
+        paths += find_overlapping_files(geo_boundary_gdf, trees_dir, pattern="*.geoparquet")
         logger.debug(f"Found {len(paths)} tree vector files")
         if not paths:
             raise FileNotFoundError(f"No tree .gpkg/.parquet files in {trees_dir} overlap the boundary")
-        parts = [gpd.read_parquet(p) if p.suffix == ".parquet" else gpd.read_file(p) for p in paths]
-        parts = [g.to_crs(cfg.crs) if g.crs is not None else g.set_crs(cfg.crs) for g in parts]
-        trees_gdf = gpd.GeoDataFrame(pd.concat(parts, ignore_index=True), crs=cfg.crs)
+        parts = [
+            gpd.read_parquet(p) if p.suffix.lower() in (".parquet", ".geoparquet") else gpd.read_file(p)
+            for p in paths
+        ]
+        norm_parts = []
+        for g in parts:
+            g = g.to_crs(cfg.crs) if g.crs is not None else g.set_crs(cfg.crs)
+            if g.geometry.name != "geometry":
+                g = g.rename_geometry("geometry")
+            norm_parts.append(g)
+        trees_gdf = gpd.GeoDataFrame(pd.concat(norm_parts, ignore_index=True), geometry="geometry", crs=cfg.crs)
 
+    if trees_gdf.geometry.name != "geometry":
+        trees_gdf = trees_gdf.rename_geometry("geometry")
     trees_gdf = rename_tree_columns(trees_gdf, cfg)
     return trees_gdf.to_crs(cfg.crs) if trees_gdf.crs is not None else trees_gdf.set_crs(cfg.crs)
 
 
-def _vector_bounds(path: Path) -> tuple:
-    """File extent without reading features: GeoParquet bbox metadata, or the OGR layer extent."""
-    if path.suffix == ".parquet":
+def _vector_bounds_and_crs(path: Path) -> tuple[tuple[float, float, float, float], object | None]:
+    """File 2D extent and CRS without reading features: GeoParquet metadata or pyogrio.read_info."""
+    if path.suffix.lower() in (".parquet", ".geoparquet"):
         import json
         import pyarrow.parquet as pq
-        geo = json.loads(pq.read_schema(path).metadata[b"geo"])
-        bbox = geo["columns"][geo["primary_column"]].get("bbox")
-        return tuple(bbox) if bbox else tuple(gpd.read_parquet(path).total_bounds)
-    return tuple(gpd.read_file(path, rows=0).total_bounds)  # fast: reads no features
+
+        meta = pq.read_schema(path).metadata or {}
+        if b"geo" in meta:
+            geo = json.loads(meta[b"geo"])
+            col_meta = geo["columns"][geo["primary_column"]]
+            crs = col_meta.get("crs") or "EPSG:4326"
+            bbox = col_meta.get("bbox")
+            if bbox:
+                if len(bbox) == 6:
+                    return (float(bbox[0]), float(bbox[1]), float(bbox[3]), float(bbox[4])), crs
+                return (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])), crs
+        gdf = gpd.read_parquet(path)
+        return tuple(gdf.total_bounds), gdf.crs
+
+    import pyogrio
+
+    info = pyogrio.read_info(path, force_total_bounds=True)
+    bounds = info.get("total_bounds")
+    if bounds is not None and len(bounds) >= 4:
+        return (float(bounds[0]), float(bounds[1]), float(bounds[2]), float(bounds[3])), info.get("crs")
+    gdf = gpd.read_file(path)
+    return tuple(gdf.total_bounds), gdf.crs
+
+
+def _vector_bounds(path: Path) -> tuple:
+    """File extent without reading features: GeoParquet bbox metadata, or the OGR layer extent."""
+    return _vector_bounds_and_crs(path)[0]
 
 
 def find_overlapping_files(boundary_gdf: gpd.GeoDataFrame, files_dir: Path, pattern: str = "*.gpkg") -> list[Path]:
     """
     Returns paths from files_dir whose bounding box intersects boundary_gdf.
-    Uses a spatial index over file extents — no tile naming convention required.
+    Uses file extent metadata and transforms bounds to boundary_gdf.crs when
+    a file is stored in another CRS — no tile naming convention required.
     """
-    files = list(files_dir.glob(pattern))
+    if boundary_gdf.empty:
+        return []
+    files = sorted(files_dir.glob(pattern))
     if not files:
         return []
 
-    extents = []
+    import math
+    from pyproj import CRS, Transformer
+    from shapely.geometry import box
+
+    target_crs = CRS.from_user_input(boundary_gdf.crs) if boundary_gdf.crs is not None else None
+    dissolved = boundary_gdf.geometry.union_all()
+    if dissolved is None or dissolved.is_empty:
+        return []
+
+    hits: list[Path] = []
     for p in files:
         try:
-            bbox = _vector_bounds(p)
-            extents.append({"path": p, "minx": bbox[0], "miny": bbox[1], "maxx": bbox[2], "maxy": bbox[3]})
+            bbox, file_crs = _vector_bounds_and_crs(p)
+            if any(math.isnan(v) for v in bbox):
+                continue
+            minx, miny, maxx, maxy = bbox
+            if target_crs is not None and file_crs is not None:
+                src_crs = CRS.from_user_input(file_crs)
+                if src_crs != target_crs:
+                    minx, miny, maxx, maxy = Transformer.from_crs(
+                        src_crs, target_crs, always_xy=True
+                    ).transform_bounds(minx, miny, maxx, maxy)
+            if box(minx, miny, maxx, maxy).intersects(dissolved):
+                hits.append(p)
         except Exception as e:
             logger.warning(f"Could not read extent of {p}: {e}")
 
-    if not extents:
-        return []
-
-    from shapely.geometry import box
-    extent_gdf = gpd.GeoDataFrame(
-        extents,
-        geometry=[box(e["minx"], e["miny"], e["maxx"], e["maxy"]) for e in extents],
-        crs=boundary_gdf.crs,
-    )
-    dissolved = boundary_gdf.dissolve()
-    hits = extent_gdf[extent_gdf.intersects(dissolved.geometry.iloc[0])]
-    return hits["path"].tolist()
+    return hits
 
 
 # Rasters that sit beside CHM tiles but are not heights: Defra VOM ships a
@@ -157,23 +226,29 @@ def find_overlapping_rasters(boundary_gdf: gpd.GeoDataFrame, files_dir: Path, pa
     stored in another CRS are still selected correctly. Known non-height
     rasters (see is_chm_tile) are skipped.
     """
-    import rioxarray as rxr
+    if boundary_gdf.empty:
+        return []
+    import rasterio
+    from rasterio.warp import transform_bounds
+    from shapely.geometry import box
+
     files = sorted(p for p in files_dir.rglob(pattern) if is_chm_tile(p))
     if not files:
         return []
 
-    from shapely.geometry import box
-    dissolved = boundary_gdf.dissolve().geometry.iloc[0]
+    dissolved = boundary_gdf.geometry.union_all()
+    if dissolved is None or dissolved.is_empty:
+        return []
+
     result = []
     for p in files:
         try:
-            rast = rxr.open_rasterio(p)
-            if rast.rio.crs is not None and boundary_gdf.crs is not None:
-                bounds = rast.rio.transform_bounds(boundary_gdf.crs)
-            else:
-                bounds = rast.rio.bounds()
-            bbox_geom = box(*bounds)
-            if bbox_geom.intersects(dissolved):
+            with rasterio.open(p) as src:
+                if src.crs is not None and boundary_gdf.crs is not None and src.crs != boundary_gdf.crs:
+                    bounds = transform_bounds(src.crs, boundary_gdf.crs, *src.bounds)
+                else:
+                    bounds = tuple(src.bounds)
+            if box(*bounds).intersects(dissolved):
                 result.append(p)
         except Exception as e:
             logger.warning(f"Could not read bounds of {p}: {e}")
@@ -214,10 +289,11 @@ def filter_buffer_geometries(
     geo_sdf = sedona.sql(query)
     geo_sdf.createOrReplaceTempView(f"geo_{table_name}_{sfx}")
 
-    if buffer:
+    if buffer is not None:
+        geom_expr = f"ST_Buffer(b.geometry, {buffer})" if buffer else "b.geometry"
         geo_buffer_sdf = sedona.sql(
             f"""
-            SELECT ST_Buffer(b.geometry, {buffer}) AS geometry, b.{id_col}
+            SELECT {geom_expr} AS geometry, b.{id_col}
             FROM geo_{table_name}_{sfx} b
             """
         )
@@ -284,12 +360,20 @@ def save_csv_as_parquet(in_directory: Path, path_pattern: str, out_path: Path) -
     return concatenated_df
 
 
-def save_temp_file(spark_df: DataFrame, output_path: Path, coalesce: int = 1, file_format: str = "csv") -> pd.DataFrame:
+def save_temp_file(
+    spark_df: DataFrame,
+    output_path: Path,
+    coalesce: int = 1,
+    file_format: str = "csv",
+    return_df: bool = True,
+) -> pd.DataFrame | None:
     """
-    Saves a Spark DataFrame to a single named file and returns a Pandas DataFrame.
+    Saves a Spark DataFrame to a single named file (atomically) and optionally returns a Pandas DataFrame.
     Workaround for Spark writing to a directory instead of a single file.
     """
-    with tempfile.TemporaryDirectory() as temp_dir:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output_path.parent) as temp_dir:
         temp_path = Path(temp_dir)
         spark_df.coalesce(coalesce) \
             .write \
@@ -307,8 +391,10 @@ def save_temp_file(spark_df: DataFrame, output_path: Path, coalesce: int = 1, fi
                 f"save_temp_file expected one part file but Spark wrote {len(part_files)} "
                 f"(coalesce={coalesce}); pass coalesce=1 so no rows are dropped"
             )
-        shutil.move(part_files[0], output_path)
+        part_files[0].replace(output_path)
 
+    if not return_df:
+        return None
     if file_format == "parquet":
         return pd.read_parquet(output_path)
     elif file_format == "csv":

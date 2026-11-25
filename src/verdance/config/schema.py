@@ -15,7 +15,7 @@ def is_osm(source: str | None) -> bool:
 
 
 def is_overture(source: str | None) -> bool:
-    """True when data.buildings requests Overture Maps building footprints."""
+    """True when `data.buildings` or `data.parks_sites` requests Overture Maps."""
     return _sentinel(source) == "overture"
 
 
@@ -104,7 +104,9 @@ class DataPaths:
     road_nodes: str | None = None
     """Road nodes, when the road network is split across two files."""
     trees_dir: str | None = None
-    """Directory of segmented tree crowns — written by `Trees`, read by T3 and Tree_count."""
+    """Single vector/parquet file or directory of segmented tree crowns — written by
+    `Trees`, read by `T3`, `Tree_count`, `Visibility`, and as a fallback by `T30` /
+    `T30_buildings` when no CHM source is configured."""
     chm_tiles_dir: str | None = None
     """Directory of canopy height model tiles. Suits survey tiles; globally-tiled
     models belong in `meta_chm`, which reads only the boundary window."""
@@ -144,8 +146,9 @@ class OSMConfig:
     exclude_private: bool = True
     """Drop parks tagged `access=private`, `no` or `customers`."""
     fetch_buffer: int = 2000
-    """Buffer in metres around the census boundary when fetching roads, parks and
-    access points, so the network can route to parks just outside the study area."""
+    """Buffer in metres around the census boundary when fetching OSM roads, parks and
+    access points, and also the search distance used by `T300` for file-based layers,
+    so the network can route to parks just outside the study area."""
 
 
 @dataclass
@@ -223,6 +226,7 @@ class HeightSourceSpec:
 
     @property
     def label(self) -> str:
+        """Display label for this height source (`name` if set, otherwise `source`)."""
         return self.name or self.source
 
 
@@ -299,7 +303,7 @@ class VerdanceConfig:
     """
 
     study_area_name: str
-    """Name of the study area, used in output filenames and the viz title."""
+    """Name of the study area, shown by `verdance validate` and used as the viz title."""
     crs: str
     """Projected CRS in metres that every layer is reprojected to, e.g. `EPSG:32632`.
     A geographic CRS is rejected: the buffers and areas verdance computes are metric."""
@@ -324,7 +328,7 @@ class VerdanceConfig:
     dggs_resolution: int | None = None
     """Resolution of the `dggs` grid; its meaning depends on the system chosen."""
     h3_resolution: int | None = None
-    """Deprecated: use `dggs: h3` with `dggs_resolution`. The loader normalizes it there."""
+    """Deprecated: use `dggs: h3` with `dggs_resolution`. The loader normalises it there."""
     tile_system: TileSystemConfig = field(default_factory=TileSystemConfig)
     """Legacy UK VOM tile settings, parsed so older configs still load."""
     osm: OSMConfig = field(default_factory=OSMConfig)

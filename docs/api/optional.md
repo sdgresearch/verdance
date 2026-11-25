@@ -1,6 +1,6 @@
 # Optional modules
 
-Modules with extra dependencies or external services: canopy sources, vegetation
+Modules using external services or optional pipeline stages: canopy sources, vegetation
 indices, tree-crown segmentation and the visibility engines.
 
 ## Canopy sources
@@ -37,6 +37,10 @@ indices, tree-crown segmentation and the visibility engines.
 
 Two engines compute the same metric: `raster` casts rays over a DSM and scales,
 `vector` uses exact Sedona geometry and serves as the reference.
+
+::: verdance.optional.visibility.params
+    options:
+      heading_level: 3
 
 ::: verdance.optional.visibility.raster_engine
     options:

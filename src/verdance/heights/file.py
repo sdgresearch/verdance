@@ -19,23 +19,36 @@ RASTER_SUFFIXES = (".tif", ".tiff", ".vrt", ".img")
 
 
 class FileHeights(HeightSource):
+    """Local vector or raster height source configured via `options['path']`."""
+
     def __init__(self, spec, cfg):
         super().__init__(spec, cfg)
         self.path = Path(self.options["path"])
         self.kind = "raster" if self.path.is_dir() or self.path.suffix.lower() in RASTER_SUFFIXES else "vector"
 
+    def _raster_files(self) -> list[Path]:
+        if not self.path.exists():
+            return []
+        if self.path.is_dir():
+            return sorted(p for p in self.path.rglob("*") if p.is_file() and p.suffix.lower() in RASTER_SUFFIXES)
+        return [self.path]
+
     def cache_key(self) -> str:
+        """Cache key incorporating file sizes and modification timestamps."""
         # a changed file must not reuse cached heights
         import hashlib
-        files = sorted(self.path.rglob("*.tif")) if self.path.is_dir() else [self.path]
+        files = self._raster_files() if self.kind == "raster" else ([self.path] if self.path.exists() else [])
         stamp = "|".join(f"{p}:{p.stat().st_size}:{p.stat().st_mtime_ns}" for p in files)
         return hashlib.sha1((super().cache_key() + stamp).encode()).hexdigest()[:10]
 
     def heights(self, buildings: gpd.GeoDataFrame, ctx: HeightContext) -> pd.DataFrame:
+        """Extract building heights from the configured local raster(s) or vector file."""
         if not self.path.exists():
             raise FileNotFoundError(f"heights source file: {self.path} not found")
         if self.kind == "raster":
-            paths = sorted(self.path.rglob("*.tif")) if self.path.is_dir() else [self.path]
+            paths = self._raster_files()
+            if not paths:
+                raise FileNotFoundError(f"heights source file: no raster files ({RASTER_SUFFIXES}) found in {self.path}")
             return zonal_heights(buildings, paths, self.options.get("stat", "median"), ctx.cache_dir)
         source = self._read_vector(buildings)
         return match_by_overlap(buildings, source, self.cfg.heights.min_overlap)
@@ -49,6 +62,9 @@ class FileHeights(HeightSource):
             gdf = gpd.read_file(self.path, **kwargs)
         if column not in gdf.columns:
             raise ValueError(f"heights source file: column {column!r} not in {self.path} ({list(gdf.columns)})")
-        gdf = gdf.rename(columns={column: "height"})[["height", "geometry"]]
+        geom_col = gdf.geometry.name
+        gdf = gdf[[column, geom_col]].rename(columns={column: "height"})
+        if gdf.geometry.name != "geometry":
+            gdf = gdf.rename_geometry("geometry")
         gdf = gdf.to_crs(self.cfg.crs) if gdf.crs is not None else gdf.set_crs(self.cfg.crs)
         return gdf.cx[slice(*buildings.total_bounds[[0, 2]]), slice(*buildings.total_bounds[[1, 3]])]

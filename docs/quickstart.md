@@ -73,9 +73,9 @@ below; on a shared machine or a small home directory, point the caches at a larg
 
 | What | Default location | Change it with |
 |---|---|---|
-| Results, parquet cache of the inputs, `viz.duckdb` | `<output.base_dir>/` and `<output.base_dir>/database/` | `output.base_dir` in the config |
+| Results, parquet cache of the inputs, per-study-area canopy masks (`gee_canopy/`, `meta_canopy/`), `viz.duckdb` | `<output.base_dir>/` and `<output.base_dir>/database/` | `output.base_dir` in the config |
 | Logs (one file per module, plus `viz.log`) | `<output.base_dir>/logs/` | — |
-| Downloads shared between runs: canopy-height tiles, Earth Engine rasters (heights, terrain, canopy), OpenStreetMap responses | `<output.base_dir>/database/chm_cache/` | `data.chm_cache_dir` in the config, else the `VERDANCE_CACHE_DIR` environment variable |
+| Downloads shared between runs: canopy-height tiles, Earth Engine heights and terrain, OpenStreetMap responses | `<output.base_dir>/database/chm_cache/` | `data.chm_cache_dir` in the config, else the `VERDANCE_CACHE_DIR` environment variable |
 | Sedona/Spark jars (~110 MB, downloaded once) | `~/.ivy2` | `VERDANCE_IVY_DIR` |
 | DuckDB spatial extension for `verdance viz` (downloaded once) | `~/.duckdb/extensions` | `VERDANCE_DUCKDB_EXTENSIONS` |
 | Temporary files: Spark shuffle and spill files, JVM temp files, Spark's warehouse directory | the system temp directory | `TMPDIR` (`SPARK_LOCAL_DIRS` overrides it for Spark's shuffle files) |

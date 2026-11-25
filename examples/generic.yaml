@@ -15,11 +15,12 @@ data:
 
   # Vector file (GeoPackage, Shapefile, GeoJSON, etc.) with building footprints —
   # or one of the remote sources (buildings only):
-  #   "osm"            OpenStreetMap footprints (no heights)
-  #   "overture"       Overture Maps (global; height is sparse outside major cities)
-  #   "open_buildings" Google Open Buildings v3 via GEE (needs gee_project; no
-  #                    heights; Africa, South/SE Asia, Latin America & Caribbean
-  #                    only — NOT Europe or North America)
+  #   "osm"            OpenStreetMap footprints (parses height & building:levels when tagged)
+  #   "overture"       Overture Maps (global; height & num_floors sparse outside major cities)
+  #   "open_buildings" Google Open Buildings v3 via GEE (needs gee_project; no native
+  #                    heights — pair with `heights.sources` such as gba or
+  #                    open_buildings_temporal; Africa, South/SE Asia, Latin America &
+  #                    Caribbean only — NOT Europe or North America)
   buildings: /path/to/buildings.gpkg
 
   # Tree polygons: a single vector/parquet file, or a directory of .gpkg /
@@ -29,7 +30,7 @@ data:
   # chm_tiles_dir instead.
   trees_dir: /path/to/trees/
 
-  # Park polygon file — or "osm"
+  # Park polygon file — or "osm" / "overture"
   parks_sites: /path/to/parks.gpkg
 
   # Park access point file (can be same file as parks_sites if no separate
@@ -39,6 +40,8 @@ data:
 
   # Road network file with edges and nodes as separate layers — or "osm"
   roads: /path/to/roads.gpkg
+  # Optional separate road-nodes file when edges and nodes live in two files
+  road_nodes: null
 
   # Census/administrative boundary polygons (one row per census unit).
   # Always a file — this defines the study area, including for OSM queries.
@@ -93,6 +96,11 @@ columns:
   # automatically.
   building_height_col: null
 
+  # Optional filter for file-based buildings: keep only rows where
+  # building_use_col matches building_use_value (a string or list of strings).
+  building_use_col: null
+  building_use_value: null
+
   # Road network column names
   road_node_id: node_id
   road_edge_start: from_node
@@ -145,7 +153,17 @@ output:
 #     leisure: [park, recreation_ground]
 #     landuse: [village_green, recreation_ground]
 #   exclude_private: true       # drop parks tagged access=private/no/customers
-#   fetch_buffer: 2000          # metres around the census boundary for roads/parks
+#   fetch_buffer: 2000          # metres around the census boundary for roads/parks (also T300 search buffer)
+
+# Google Open Buildings v3 options — used when data.buildings: open_buildings
+# open_buildings:
+#   confidence_threshold: 0.7   # min detection confidence to keep (values roughly in [0.5, 1))
+
+# Overture Maps options — used when data.buildings or data.parks_sites is "overture"
+# overture:
+#   park_land_use:              # land_use subtypes or classes kept as parks
+#     - park
+#     - recreation_ground
 
 # Ignore green spaces smaller than this (hectares) in T300. The WHO guideline
 # behind the 300 rule uses >= 0.5-1 ha. null keeps every park.

@@ -68,6 +68,8 @@ class GeohashSystem(PythonDGGS):
     def cells_covering(
         self, geom_wgs84: BaseGeometry, resolution: int
     ) -> Iterable[tuple[str, Polygon]]:
+        if geom_wgs84 is None or geom_wgs84.is_empty:
+            return
         w, h = cell_size(resolution)
         minx, miny, maxx, maxy = geom_wgs84.bounds
         i0 = max(int((minx + 180.0) // w), 0)

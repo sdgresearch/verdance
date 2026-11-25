@@ -114,15 +114,22 @@ def process_geo_code(
         imagery_ic = get_imagery(filt_fc, imagery_ee_path, start_date, end_date, cloud_coverage, spectral_indexes, composite)
 
         def dissolve_by_code(sub_code):
-            code = ee.String(sub_code)
-            geom = boundaries_fc.filter(ee.Filter.eq(sub_geo_level, code)).union().geometry()
-            return ee.Feature(geom).set(sub_geo_level, code)
+            geom = filt_fc.filter(ee.Filter.eq(sub_geo_level, sub_code)).union().geometry()
+            return ee.Feature(geom).set(sub_geo_level, sub_code)
 
         sub_boundaries_fc = ee.FeatureCollection(sub_values.map(dissolve_by_code))
         results = calculate_median_index(imagery_ic, sub_boundaries_fc).getInfo()["features"]
         geo_spectral_df = pd.DataFrame([f["properties"] for f in results])
+        missing_idx = [idx for idx in spectral_indexes if idx not in geo_spectral_df.columns]
+        if missing_idx:
+            raise ValueError(
+                f"Spectral: GEE returned no values for {missing_idx} in {geo_code} — "
+                "check date range, cloud_coverage, and imagery_ee_path"
+            )
 
-        geo_spectral_df.to_csv(out_path, index=False)
+        from ..utils.data_processing import write_csv_atomic
+
+        write_csv_atomic(geo_spectral_df, out_path)
 
         end_time = time.time()
         logger.info(f"Spectral: {geo_code} — {len(geo_spectral_df)} records in {end_time - start_time:.2f}s")

@@ -26,6 +26,7 @@ from .utils.data_processing import (
     find_overlapping_rasters,
     load_trees_gdf,
     drop_geo_views,
+    write_csv_atomic,
 )
 
 
@@ -64,55 +65,71 @@ def binarise_tiles(
     logger.info(f"Binarising {len(chm_paths_lst)} CHM tiles")
 
     chm_xr_lst = []
-    for file in chm_paths_lst:
-        try:
-            temp_rast = rxr.open_rasterio(file, masked=True)
-            # probe a single pixel so an unreadable tile is caught and named here,
-            # without forcing the whole tile resident: a full `.values` per tile held
-            # every tile in memory at once on top of the mosaic merge_arrays then
-            # builds. Defra VOM tiles are 5000x5000 at 1 m, so one is ~95 MB (float32)
-            # and English districts reach 244 overlapping tiles (median 18, p90 60).
-            temp_rast[0, :1, :1].values
-            chm_xr_lst.append(temp_rast)
-        except Exception as e:
-            logger.error(f"Error reading {file}: {e}")
-
-    if not chm_xr_lst:
-        raise FileNotFoundError("No readable CHM tiles overlap the boundary")
-
-    # the mosaic is one driver-side float32 array; refuse it when it cannot fit
-    total_px = sum(int(a.sizes["y"]) * int(a.sizes["x"]) for a in chm_xr_lst)
-    est_bytes = total_px * 4
-    ram = _total_ram_bytes()
-    biggest = max(int(a.sizes["y"]) * int(a.sizes["x"]) for a in chm_xr_lst)
-    if ram and est_bytes > ram:
-        raise MemoryError(
-            f"{len(chm_xr_lst)} CHM tiles would merge into a {est_bytes / 2**30:.1f} GB mosaic, "
-            f"more than this machine's {ram / 2**30:.1f} GB of RAM (largest tile {biggest:,} px). "
-            "Process a finer geo_level, or — if these are globally-tiled rasters such as the "
-            "Meta/WRI CHM — set data.meta_chm instead of data.chm_tiles_dir, which reads only "
-            "the boundary window."
-        )
-    if ram and est_bytes > ram / 2:
-        logger.warning(
-            f"CHM mosaic for this unit is ~{est_bytes / 2**30:.1f} GB against {ram / 2**30:.1f} GB "
-            "of RAM; reprojection may double it. Consider a finer geo_level."
-        )
     try:
-        merged_chm_xr = merge_arrays(chm_xr_lst, method="last" if overlap == "latest" else "max")
-    except Exception as e:
-        # the mosaic is still one driver-side array; a district with hundreds of
-        # tiles can exhaust memory here even though the tiles load lazily
-        raise MemoryError(
-            f"Could not merge {len(chm_xr_lst)} CHM tiles into one mosaic ({e}). "
-            "Process a smaller geo_level, or raise SPARK_DRIVER_MEMORY."
-        ) from e
-    if target_crs is not None and merged_chm_xr.rio.crs is not None:
+        for file in chm_paths_lst:
+            try:
+                temp_rast = rxr.open_rasterio(file, masked=True)
+                # probe a single pixel so an unreadable tile is caught and named here,
+                # without forcing the whole tile resident: a full `.values` per tile held
+                # every tile in memory at once on top of the mosaic merge_arrays then
+                # builds. Defra VOM tiles are 5000x5000 at 1 m, so one is ~95 MB (float32)
+                # and English districts reach 244 overlapping tiles (median 18, p90 60).
+                temp_rast[0, :1, :1].values
+                chm_xr_lst.append(temp_rast)
+            except Exception as e:
+                logger.error(f"Error reading {file}: {e}")
+
+        if not chm_xr_lst:
+            raise FileNotFoundError("No readable CHM tiles overlap the boundary")
+
+        # Validate uniform CRS across tiles before merging
+        tile_crs_set = {a.rio.crs for a in chm_xr_lst if a.rio.crs is not None}
+        if len(tile_crs_set) > 1:
+            raise ValueError(f"CHM tiles have mixed CRSs ({tile_crs_set}) — reproject them to a single CRS")
+
+        # Estimate the merged mosaic bbox in float32 bytes; refuse when it cannot fit in RAM
+        res_x, res_y = (abs(v) for v in chm_xr_lst[0].rio.resolution())
+        bounds_list = [a.rio.bounds() for a in chm_xr_lst]
+        union_w = max(b[2] for b in bounds_list) - min(b[0] for b in bounds_list)
+        union_h = max(b[3] for b in bounds_list) - min(b[1] for b in bounds_list)
+        union_px = int((union_w / res_x) * (union_h / res_y)) if res_x > 0 and res_y > 0 else 0
+        sum_px = sum(int(a.sizes["y"]) * int(a.sizes["x"]) for a in chm_xr_lst)
+        est_bytes = max(union_px, sum_px) * 4
+        ram = _total_ram_bytes()
+        biggest = max(int(a.sizes["y"]) * int(a.sizes["x"]) for a in chm_xr_lst)
+        if ram and est_bytes > ram:
+            raise MemoryError(
+                f"{len(chm_xr_lst)} CHM tiles would merge into a {est_bytes / 2**30:.1f} GB mosaic, "
+                f"more than this machine's {ram / 2**30:.1f} GB of RAM (largest tile {biggest:,} px). "
+                "Process a finer geo_level, or — if these are globally-tiled rasters such as the "
+                "Meta/WRI CHM — set data.meta_chm instead of data.chm_tiles_dir, which reads only "
+                "the boundary window."
+            )
+        if ram and est_bytes > ram / 2:
+            logger.warning(
+                f"CHM mosaic for this unit is ~{est_bytes / 2**30:.1f} GB against {ram / 2**30:.1f} GB "
+                "of RAM; reprojection may double it. Consider a finer geo_level."
+            )
+        try:
+            merged_chm_xr = merge_arrays(chm_xr_lst, method="last" if overlap == "latest" else "max")
+        except MemoryError as e:
+            # the mosaic is a driver-side numpy/Python array (not Spark JVM heap)
+            raise MemoryError(
+                f"Could not merge {len(chm_xr_lst)} CHM tiles into one mosaic in Python memory ({e}). "
+                "Process a finer geo_level or use data.meta_chm for globally-tiled models."
+            ) from e
+    finally:
+        for a in chm_xr_lst:
+            a.close()
+
+    binary = ((merged_chm_xr >= low_threshold) & (merged_chm_xr <= high_threshold)).astype("float32")
+    binary = binary.where(merged_chm_xr.notnull()).rio.write_nodata(np.nan)
+    if target_crs is not None and binary.rio.crs is not None:
         from pyproj import CRS as ProjCRS
-        if merged_chm_xr.rio.crs != ProjCRS.from_user_input(target_crs):
-            merged_chm_xr = merged_chm_xr.rio.reproject(target_crs)
-    binary = ((merged_chm_xr >= low_threshold) & (merged_chm_xr <= high_threshold)).astype(float)
-    return binary.where(merged_chm_xr.notnull())
+        from rasterio.enums import Resampling
+        if binary.rio.crs != ProjCRS.from_user_input(target_crs):
+            binary = binary.rio.reproject(target_crs, resampling=Resampling.nearest, nodata=np.nan)
+    return binary
 
 
 def get_canopy_cover_raster(subgeo_gdf: gpd.GeoDataFrame, binary_chm_xr: xr.DataArray) -> gpd.GeoDataFrame:
@@ -178,11 +195,14 @@ def get_canopy_cover_vector(subgeo_gdf: gpd.GeoDataFrame, trees_gdf: gpd.GeoData
             raise ValueError(
                 "Non-polygon trees need a tree_area column (columns.tree_area_col) to compute canopy cover"
             )
-        hits = gpd.sjoin(points[["tree_area", "geometry"]], units, predicate="within")
+        # `intersects` + drop_duplicates on point index keeps points lying exactly on shared unit edges
+        hits = gpd.sjoin(points[["tree_area", "geometry"]], units, predicate="intersects")
+        hits = hits[~hits.index.duplicated(keep="first")]
         canopy_area = canopy_area.add(hits.groupby("_idx")["tree_area"].sum(), fill_value=0)
 
-    subgeo_gdf["canopy_cover"] = (canopy_area.reindex(subgeo_gdf.index).fillna(0) / unit_areas * 100).round(3)
-    subgeo_gdf["total_pixels"] = unit_areas.round().astype(int)
+    valid_area = unit_areas.where(unit_areas > 0)
+    subgeo_gdf["canopy_cover"] = (canopy_area.reindex(subgeo_gdf.index).fillna(0) / valid_area * 100).round(3)
+    subgeo_gdf["total_pixels"] = unit_areas.fillna(0).round().astype(int)
     return subgeo_gdf
 
 
@@ -245,6 +265,9 @@ def process_geo_code(
 
         elif cfg.data.trees_dir:
             trees_gdf = load_trees_gdf(Path(cfg.data.trees_dir), geo_boundary_gdf, cfg)
+            if "tree_height" in trees_gdf.columns:
+                h = pd.to_numeric(trees_gdf["tree_height"], errors="coerce")
+                trees_gdf = trees_gdf[(h >= low_threshold) & (h <= high_threshold)]
             geo_canopy_cover_df = get_canopy_cover_vector(geo_boundary_gdf, trees_gdf)
 
         else:
@@ -254,7 +277,7 @@ def process_geo_code(
             )
 
         geo_canopy_cover_df = geo_canopy_cover_df[[sub_geo_level, "canopy_cover", "total_pixels"]]
-        geo_canopy_cover_df.to_csv(out_path, index=False)
+        write_csv_atomic(geo_canopy_cover_df, out_path)
 
         end_time = time.time()
         logger.info(f"T30: {geo_code} — {len(geo_canopy_cover_df)} records in {end_time - start_time:.2f}s")
