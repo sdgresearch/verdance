@@ -1,16 +1,24 @@
 # Status
 
 ## Current state
-- Branch: `docs-site-0.4.0` (uncommitted review fixes; `examples/booth_london.yaml` left untouched with prior local edits).
-- All review fixes from the full codebase & documentation audit are implemented across packaging/CI/Docker, core pipeline/config/CLI/API, DGGS, analysis/merge, heights/data sources, optional modules/visibility, viz, docs, and examples.
-- Verification passing: `pytest -q` (396 passed, 0 failed, including new `tests/test_review_regressions.py` and expanded `tests/test_docs_consistency.py`), `uvx ruff check .` (0 errors), `mkdocs build --strict` (clean), and `uv build --sdist` (clean, no `netcheck-venv/`).
+- Branch: `codebase-audit-fixes`, branched off `docs-site-0.4.0` at `569ce3f`, carrying the whole codebase & documentation audit as one commit (`3ebadbd`, 84 files). Not yet pushed to `origin`, no PR open.
+- `examples/booth_london.yaml` is deliberately left uncommitted (local Booth study edits), as are the untracked local study files listed below.
+- Verification on this branch, with every cache off `/home`: `pytest` 396 passed, `ruff check .` clean, `mkdocs build --strict` clean, `uv build --sdist` clean.
+- `docs-site-0.4.0` was merged as PR #6 at `30a03eb`, i.e. before `569ce3f`, so the Spark-session test fix also reaches `master` only through this branch.
 
-## Open / known items
-- `AGENTS.md` references `docs/project.md`, `docs/status.md`, `docs/decisions.md`, and `docs/changelog.md`, while the actual project memory files live at the repo root (`PROJECT.md`, `STATUS.md`, `DECISIONS.md`, `CHANGELOG.md`).
-- `pyproject.toml` still pins `gdal==3.10.0` in `[dependency-groups] dev` (kept untouched to avoid desyncing `uv.lock`).
-- Repo contains untracked local study configs/scripts/data (`examples/bogota.yaml`, `examples/cambridge_*.yaml`, `examples/kolkata.yaml`, `chm_processing.R`, `requests_wms.py`, `tree-data-2024-11.csv`, `scripts/prepare_*.py`) — keep out of commits.
+## What's broken / watch out for
+- `/home` is a shared 212 G volume that other users keep filling (it hit 0 bytes free this session). Always `source /scratch/acz25/greenpy_env.sh`, and set `VERDANCE_IVY_DIR=/scratch/acz25/ivy` and `RUFF_CACHE_DIR=/scratch/acz25/tmp/ruff-cache`. Without the Ivy dir, `tests/test_t3_join.py` fails with `Cannot resolve function ST_Buffer` — that is the disk, not the code.
+- `tests/conftest.py` swallows the Sedona session failure (`except Exception: return None`) and falls back to a plain Spark session, which turns the above into a confusing unresolved-function error. Should log instead.
+- `.github/workflows/release.yml` now instructs `git push upstream v0.4.0`, which contradicts this file's "push to `origin` only" rule. Unresolved: release tags may genuinely need to land on the canonical repo.
+- `viz/store.py`'s `unit_table()` sanitises layer names with `[^a-z0-9_]` but without the collision hash that `view_suffix()` got, so distinct names can still collide.
+- `merge_t3_and_t300` drops the inner `JOIN buildings` when there are no extra columns, which also drops that join's row-filtering side effect.
+- `t30.py` now filters vector trees by `low_threshold`/`high_threshold` — results-changing, and not recorded in DECISIONS.md.
+- `binarise_tiles` closes the source arrays in `finally` before `binary` is computed, relying on `merge_arrays` having materialised the data. No test covers it.
+- `CITATION.cff` says `date-released: 2026-11-16` but `v0.4.0` is not tagged yet.
+- `pyproject.toml` still pins `gdal==3.10.0` in `[dependency-groups] dev`; removing it needs a `uv lock` refresh in its own commit.
+- Untracked local study files, keep out of commits: `chm_processing.R`, `requests_wms.py`, `tree-data-2024-11.csv`, `examples/{bogota,cambridge_local,cambridge_local_residential,cambridge_osm,cambridge_osm_residential,kolkata}.yaml`, `scripts/prepare_{bogota_boundaries,booth_trees,kolkata_wards}.py`.
 
 ## Next steps
-1. Review the diff on `docs-site-0.4.0` and commit the review fixes (excluding `examples/booth_london.yaml` and untracked local study files).
-2. Decide whether to align `AGENTS.md` paths with the root `PROJECT.md`/`STATUS.md`/`DECISIONS.md`/`CHANGELOG.md` (or move the memory files into `docs/`).
-3. In a follow-up commit, drop the unused `gdal==3.10.0` dev pin and refresh `uv.lock`.
+1. Push `codebase-audit-fixes` to `origin` and open a PR into `sdgresearch/verdance`.
+2. Settle the `release.yml` vs `origin`-only question, then finish the 0.4.0 release prerequisites on `sdgresearch/verdance`: enable Pages (source `gh-pages`), grant Actions write access, upload the social preview, and configure the PyPI Trusted Publisher before tagging `v0.4.0` (and fix `CITATION.cff`'s date to the real tag date).
+3. Follow-up commits for the small items above: the `conftest.py` fallback, `unit_table()` collisions, the `t30.py` threshold decision entry, and the `gdal` dev pin with a refreshed `uv.lock`.

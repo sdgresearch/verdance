@@ -31,15 +31,15 @@ git push -u origin my-feature                                                   
 
 ## Project memory
 
-Read at the start of every session: project.md, status.md.
-Read when relevant: decisions.md; only the latest entries of changelog.md.
+Read at the start of every session: PROJECT.md, STATUS.md.
+Read when relevant: DECISIONS.md; only the latest entries of CHANGELOG.md.
 
 Update rules (each fact lives in one place):
-- changelog.md — append one dated line per meaningful change (what changed, which files).
-- decisions.md — append when choosing between alternatives (method, parameter,
+- CHANGELOG.md — append one dated line per meaningful change (what changed, which files).
+- DECISIONS.md — append when choosing between alternatives (method, parameter,
   dataset, model, framing). Format: date · decision · alternatives · reason.
-- status.md — rewrite (don't append) at the end of each session: current state,
+- STATUS.md — rewrite (don't append) at the end of each session: current state,
   what's broken, next 1–3 steps. Keep under ~40 lines; history belongs in the changelog.
-- project.md — only change if the goal, scope or methods change, and log
-  that in decisions.md too.
+- PROJECT.md — only change if the goal, scope or methods change, and log
+  that in DECISIONS.md too.
 
