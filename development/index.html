@@ -919,11 +919,15 @@ published site.</p>
 so no API token is stored anywhere. To cut one:</p>
 <ol>
 <li>Bump <code>__version__</code> in <code>src/verdance/__init__.py</code> — <code>[tool.hatch.version]</code> reads it from
-   there, so it is the only place the version is set.</li>
-<li>Move the <code>[Unreleased]</code> section of <code>CHANGELOG.md</code> under the new version number.</li>
-<li>Open a pull request, and once it is merged tag the merge commit and push the tag:</li>
+   there, so it is the only place the package version is set.</li>
+<li>Update <code>version</code> and <code>date-released</code> in <code>CITATION.cff</code>, and move the <code>[Unreleased]</code>
+   section of <code>CHANGELOG.md</code> under the new version number.</li>
+<li>Open a pull request, and once it is merged tag the merge commit and push the tag
+   to the canonical repository, <code>sdgresearch/verdance</code> — the release workflow and the
+   PyPI Trusted Publisher live there, so a tag pushed to a fork publishes nothing:</li>
 </ol>
-<div class="highlight"><pre><span></span><code>git<span class="w"> </span>tag<span class="w"> </span>-a<span class="w"> </span>v&lt;version&gt;<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;v&lt;version&gt;&quot;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>git<span class="w"> </span>push<span class="w"> </span>upstream<span class="w"> </span>v&lt;version&gt;
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>tag<span class="w"> </span>-a<span class="w"> </span>v&lt;version&gt;<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;v&lt;version&gt;&quot;</span>
+git<span class="w"> </span>push<span class="w"> </span>&lt;remote-for-sdgresearch&gt;<span class="w"> </span>v&lt;version&gt;<span class="w">   </span><span class="c1"># `upstream`, when working from a fork</span>
 </code></pre></div>
 <p>The tag triggers <code>.github/workflows/release.yml</code>, which builds the sdist and wheel and
 uploads them. To check a build locally first:</p>

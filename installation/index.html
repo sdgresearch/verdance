@@ -1001,7 +1001,11 @@ startup; variables already set in the environment win. Every setting is optional
 </tr>
 <tr>
 <td><code>SPARK_DRIVER_MEMORY</code></td>
-<td>Spark's heap (e.g. <code>16g</code>). Spark runs locally, so this is the memory for all its work. Default: three quarters of the machine's RAM, at most <code>64g</code></td>
+<td>Spark's heap (e.g. <code>16g</code>). Spark runs locally, so this is the memory for all its work. Default: three quarters of the machine's RAM (respecting container cgroup limits), at most <code>64g</code></td>
+</tr>
+<tr>
+<td><code>SPARK_EXECUTOR_MEMORY</code></td>
+<td>Spark executor heap (defaults to <code>SPARK_DRIVER_MEMORY</code>)</td>
 </tr>
 <tr>
 <td><code>GEE_PROJECT_NAME</code></td>
@@ -1009,7 +1013,7 @@ startup; variables already set in the environment win. Every setting is optional
 </tr>
 <tr>
 <td><code>VERDANCE_CACHE_DIR</code></td>
-<td>Shared download cache for canopy tiles, Earth Engine rasters and OSM responses</td>
+<td>Shared download cache for canopy tiles, Earth Engine heights/terrain and OSM responses</td>
 </tr>
 <tr>
 <td><code>VERDANCE_IVY_DIR</code></td>
@@ -1021,7 +1025,11 @@ startup; variables already set in the environment win. Every setting is optional
 </tr>
 <tr>
 <td><code>VERDANCE_SPARK_MASTER</code></td>
-<td>Spark master URL; defaults to <code>local[*]</code></td>
+<td>Spark master URL (alias: <code>SPARK_MASTER</code>); defaults to <code>local[*]</code></td>
+</tr>
+<tr>
+<td><code>VERDANCE_NO_DOTENV</code></td>
+<td>Set to <code>1</code> to skip loading <code>.env</code> files at startup</td>
 </tr>
 <tr>
 <td><code>TMPDIR</code></td>

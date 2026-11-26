@@ -853,16 +853,16 @@ importable directly from the top-level package:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">verdance</span>
 
 <span class="n">cfg</span> <span class="o">=</span> <span class="n">verdance</span><span class="o">.</span><span class="n">load_config</span><span class="p">(</span><span class="s2">&quot;mycity.yaml&quot;</span><span class="p">)</span>
-<span class="n">verdance</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">cfg</span><span class="p">,</span> <span class="s2">&quot;T3&quot;</span><span class="p">,</span> <span class="n">buffer</span><span class="o">=</span><span class="mi">50</span><span class="p">)</span>      <span class="c1"># writes T3 CSVs, returns {geo_code: DataFrame | None}</span>
-<span class="n">merged</span> <span class="o">=</span> <span class="n">verdance</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">cfg</span><span class="p">,</span> <span class="s2">&quot;Merge&quot;</span><span class="p">)</span>     <span class="c1"># consolidates and returns the merged unit table</span>
+<span class="n">verdance</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">cfg</span><span class="p">,</span> <span class="s2">&quot;T3&quot;</span><span class="p">,</span> <span class="n">buffer</span><span class="o">=</span><span class="mi">50</span><span class="p">)</span>                   <span class="c1"># writes T3 CSVs, returns {geo_code: DataFrame | None}</span>
+<span class="n">merged</span> <span class="o">=</span> <span class="n">verdance</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">cfg</span><span class="p">,</span> <span class="s2">&quot;Merge&quot;</span><span class="p">,</span> <span class="n">t3_buffers</span><span class="o">=</span><span class="p">[</span><span class="mi">50</span><span class="p">])</span> <span class="c1"># consolidates and returns the merged unit table</span>
 </code></pre></div>
 <p>They are imported lazily, so <code>import verdance</code> — to read <code>verdance.__version__</code>, say —
 does not pull in PySpark and the rest of the stack.</p>
 <p><code>VerdanceConfig</code> is documented alongside the YAML keys it mirrors, in the
 <a href="../configuration/#reference">config reference</a>.</p>
-<p>The per-geo-code analysis modules (T3, T30, T30_buildings, T300, Tree_count) and Merge
-are covered by <code>run()</code>. Trees, Heights, Spectral and the raster Visibility engine have
-bespoke setup and remain CLI-only for now.</p>
+<p>The per-geo-code analysis modules (<code>T3</code>, <code>T30</code>, <code>T30_buildings</code>, <code>T300</code>, <code>Tree_count</code>,
+vector <code>Visibility</code>) and <code>Merge</code> are covered by <code>run()</code>. <code>Trees</code>, <code>Heights</code>, <code>Spectral</code>
+and the raster <code>Visibility</code> engine have bespoke setup and remain CLI-only for now.</p>
 <h2 id="public-api">Public API<a class="headerlink" href="#public-api" title="Permanent link">&para;</a></h2>
 
 
@@ -880,8 +880,9 @@ bespoke setup and remain CLI-only for now.</p>
 
         <p>Run one verdance process programmatically and return its result.</p>
 <p><code>config</code> is a path or a loaded <code>VerdanceConfig</code>. <code>process</code> is one of T3,
-T30, T30_buildings, T300, Tree_count or Merge. A Spark session is created
-(and reused via <code>getOrCreate</code>) unless one is passed as <code>sedona</code>.</p>
+T30, T30_buildings, T300, Tree_count, Visibility (vector engine) or Merge.
+A Spark session is created (and reused via <code>getOrCreate</code>) unless one is
+passed as <code>sedona</code>.</p>
 <p>Merge returns the merged unit <code>DataFrame</code>; the per-geo modules write their
 CSVs, record a run manifest, and return <code>{geo_code: DataFrame | None}</code> (None
 for a region that failed). For Trees, Heights, Spectral and raster
@@ -996,7 +997,39 @@ Visibility, use the <code>verdance</code> CLI.</p>
 <span class="normal">160</span>
 <span class="normal">161</span>
 <span class="normal">162</span>
-<span class="normal">163</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span>
+<span class="normal">163</span>
+<span class="normal">164</span>
+<span class="normal">165</span>
+<span class="normal">166</span>
+<span class="normal">167</span>
+<span class="normal">168</span>
+<span class="normal">169</span>
+<span class="normal">170</span>
+<span class="normal">171</span>
+<span class="normal">172</span>
+<span class="normal">173</span>
+<span class="normal">174</span>
+<span class="normal">175</span>
+<span class="normal">176</span>
+<span class="normal">177</span>
+<span class="normal">178</span>
+<span class="normal">179</span>
+<span class="normal">180</span>
+<span class="normal">181</span>
+<span class="normal">182</span>
+<span class="normal">183</span>
+<span class="normal">184</span>
+<span class="normal">185</span>
+<span class="normal">186</span>
+<span class="normal">187</span>
+<span class="normal">188</span>
+<span class="normal">189</span>
+<span class="normal">190</span>
+<span class="normal">191</span>
+<span class="normal">192</span>
+<span class="normal">193</span>
+<span class="normal">194</span>
+<span class="normal">195</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span>
     <span class="n">config</span><span class="p">,</span>
     <span class="n">process</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
@@ -1023,8 +1056,9 @@ Visibility, use the <code>verdance</code> CLI.</p>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Run one verdance process programmatically and return its result.</span>
 
 <span class="sd">    `config` is a path or a loaded `VerdanceConfig`. `process` is one of T3,</span>
-<span class="sd">    T30, T30_buildings, T300, Tree_count or Merge. A Spark session is created</span>
-<span class="sd">    (and reused via `getOrCreate`) unless one is passed as `sedona`.</span>
+<span class="sd">    T30, T30_buildings, T300, Tree_count, Visibility (vector engine) or Merge.</span>
+<span class="sd">    A Spark session is created (and reused via `getOrCreate`) unless one is</span>
+<span class="sd">    passed as `sedona`.</span>
 
 <span class="sd">    Merge returns the merged unit `DataFrame`; the per-geo modules write their</span>
 <span class="sd">    CSVs, record a run manifest, and return `{geo_code: DataFrame | None}` (None</span>
@@ -1039,8 +1073,36 @@ Visibility, use the <code>verdance</code> CLI.</p>
 
     <span class="n">cfg</span> <span class="o">=</span> <span class="n">config</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">VerdanceConfig</span><span class="p">)</span> <span class="k">else</span> <span class="n">load_config</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
     <span class="n">geo_levels</span> <span class="o">=</span> <span class="n">cfg</span><span class="o">.</span><span class="n">columns</span><span class="o">.</span><span class="n">geo_levels</span>
-    <span class="n">dggs</span> <span class="o">=</span> <span class="n">dggs</span> <span class="k">if</span> <span class="n">dggs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">cfg</span><span class="o">.</span><span class="n">dggs</span>
-    <span class="n">dggs_resolution</span> <span class="o">=</span> <span class="n">dggs_resolution</span> <span class="k">if</span> <span class="n">dggs_resolution</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">cfg</span><span class="o">.</span><span class="n">dggs_resolution</span>
+
+    <span class="k">if</span> <span class="n">query_method</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;sql&quot;</span><span class="p">,</span> <span class="s2">&quot;rdd&quot;</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;query_method must be &#39;sql&#39; or &#39;rdd&#39;, got </span><span class="si">{</span><span class="n">query_method</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">rule_distance</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;euclidean&quot;</span><span class="p">,</span> <span class="s2">&quot;network&quot;</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;rule_distance must be &#39;euclidean&#39; or &#39;network&#39;, got </span><span class="si">{</span><span class="n">rule_distance</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">rule_t3_metric</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;proximity&quot;</span><span class="p">,</span> <span class="s2">&quot;visibility&quot;</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;rule_t3_metric must be &#39;proximity&#39; or &#39;visibility&#39;, got </span><span class="si">{</span><span class="n">rule_t3_metric</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">geo_level</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">geo_level</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">geo_levels</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;geo_level </span><span class="si">{</span><span class="n">geo_level</span><span class="si">!r}</span><span class="s2"> not in config.columns.geo_levels: </span><span class="si">{</span><span class="n">geo_levels</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">dggs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">dggs</span> <span class="o">=</span> <span class="n">cfg</span><span class="o">.</span><span class="n">dggs</span>
+        <span class="k">if</span> <span class="n">dggs_resolution</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">dggs_resolution</span> <span class="o">=</span> <span class="n">cfg</span><span class="o">.</span><span class="n">dggs_resolution</span>
+    <span class="k">elif</span> <span class="n">dggs_resolution</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">dggs</span> <span class="o">==</span> <span class="n">cfg</span><span class="o">.</span><span class="n">dggs</span><span class="p">:</span>
+        <span class="n">dggs_resolution</span> <span class="o">=</span> <span class="n">cfg</span><span class="o">.</span><span class="n">dggs_resolution</span>
+
+    <span class="k">if</span> <span class="p">(</span><span class="n">dggs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">)</span> <span class="o">!=</span> <span class="p">(</span><span class="n">dggs_resolution</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;dggs and dggs_resolution must be provided together (or via config)&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">dggs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">dggs</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">SYSTEM_NAMES</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;dggs must be one of </span><span class="si">{</span><span class="n">SYSTEM_NAMES</span><span class="si">}</span><span class="s2">, got </span><span class="si">{</span><span class="n">dggs</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="n">lo</span><span class="p">,</span> <span class="n">hi</span> <span class="o">=</span> <span class="n">RESOLUTION_RANGES</span><span class="p">[</span><span class="n">dggs</span><span class="p">]</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">dggs_resolution</span><span class="p">,</span> <span class="nb">bool</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">dggs_resolution</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span> <span class="ow">and</span> <span class="n">lo</span> <span class="o">&lt;=</span> <span class="n">dggs_resolution</span> <span class="o">&lt;=</span> <span class="n">hi</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;dggs_resolution for </span><span class="si">{</span><span class="n">dggs</span><span class="si">}</span><span class="s2"> must be between </span><span class="si">{</span><span class="n">lo</span><span class="si">}</span><span class="s2"> and </span><span class="si">{</span><span class="n">hi</span><span class="si">}</span><span class="s2">, got </span><span class="si">{</span><span class="n">dggs_resolution</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">sub_geo_level</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;sub_geo_level cannot be combined with dggs (grid cells replace the sub-geography)&quot;</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">sub_geo_level</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">sub_geo_level</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">geo_levels</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;sub_geo_level </span><span class="si">{</span><span class="n">sub_geo_level</span><span class="si">!r}</span><span class="s2"> not in config.columns.geo_levels: </span><span class="si">{</span><span class="n">geo_levels</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
     <span class="n">sedona</span> <span class="o">=</span> <span class="n">sedona</span> <span class="ow">or</span> <span class="n">get_spark</span><span class="p">()</span>
 
     <span class="k">if</span> <span class="n">process</span> <span class="o">==</span> <span class="s2">&quot;Merge&quot;</span><span class="p">:</span>
@@ -1049,8 +1111,9 @@ Visibility, use the <code>verdance</code> CLI.</p>
         <span class="n">t3b</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">t3_buffers</span><span class="p">)</span>
         <span class="n">merge_output_csv</span><span class="p">(</span><span class="n">sedona</span><span class="p">,</span> <span class="n">cfg</span><span class="p">,</span> <span class="n">t3b</span><span class="p">,</span> <span class="n">dggs</span><span class="o">=</span><span class="n">dggs</span><span class="p">,</span> <span class="n">dggs_resolution</span><span class="o">=</span><span class="n">dggs_resolution</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">dggs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">merge_geo</span> <span class="o">=</span> <span class="n">geo_level</span> <span class="ow">or</span> <span class="n">sub_geo_level</span> <span class="ow">or</span> <span class="n">get_system</span><span class="p">(</span><span class="n">dggs</span><span class="p">)</span><span class="o">.</span><span class="n">column_name</span><span class="p">(</span><span class="n">dggs_resolution</span><span class="p">)</span>
-            <span class="n">merge_sub</span> <span class="o">=</span> <span class="n">sub_geo_level</span> <span class="ow">or</span> <span class="n">get_system</span><span class="p">(</span><span class="n">dggs</span><span class="p">)</span><span class="o">.</span><span class="n">column_name</span><span class="p">(</span><span class="n">dggs_resolution</span><span class="p">)</span>
+            <span class="n">grid_col</span> <span class="o">=</span> <span class="n">get_system</span><span class="p">(</span><span class="n">dggs</span><span class="p">)</span><span class="o">.</span><span class="n">column_name</span><span class="p">(</span><span class="n">dggs_resolution</span><span class="p">)</span>
+            <span class="n">merge_geo</span> <span class="o">=</span> <span class="n">geo_level</span> <span class="ow">or</span> <span class="n">grid_col</span>
+            <span class="n">merge_sub</span> <span class="o">=</span> <span class="n">grid_col</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">merge_geo</span> <span class="o">=</span> <span class="n">geo_level</span> <span class="ow">or</span> <span class="p">(</span><span class="n">geo_levels</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">geo_levels</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">geo_levels</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
             <span class="n">merge_sub</span> <span class="o">=</span> <span class="n">sub_geo_level</span> <span class="ow">or</span> <span class="n">geo_levels</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
@@ -1076,6 +1139,7 @@ Visibility, use the <code>verdance</code> CLI.</p>
 
     <span class="n">args_dict</span> <span class="o">=</span> <span class="p">{</span>
         <span class="s2">&quot;sedona&quot;</span><span class="p">:</span> <span class="n">sedona</span><span class="p">,</span> <span class="s2">&quot;geo_level&quot;</span><span class="p">:</span> <span class="n">gl</span><span class="p">,</span> <span class="s2">&quot;sub_geo_level&quot;</span><span class="p">:</span> <span class="n">sgl</span><span class="p">,</span> <span class="s2">&quot;cfg&quot;</span><span class="p">:</span> <span class="n">cfg</span><span class="p">,</span> <span class="s2">&quot;output_dir&quot;</span><span class="p">:</span> <span class="n">output_dir</span><span class="p">,</span>
+        <span class="s2">&quot;overlay_path&quot;</span><span class="p">:</span> <span class="n">tables</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;overlay_path&quot;</span><span class="p">),</span>
         <span class="s2">&quot;query_method&quot;</span><span class="p">:</span> <span class="n">query_method</span><span class="p">,</span> <span class="s2">&quot;buffer&quot;</span><span class="p">:</span> <span class="n">buffer</span><span class="p">,</span> <span class="s2">&quot;tree_area&quot;</span><span class="p">:</span> <span class="n">tree_area</span><span class="p">,</span> <span class="s2">&quot;tree_height&quot;</span><span class="p">:</span> <span class="n">tree_height</span><span class="p">,</span>
         <span class="s2">&quot;low_threshold&quot;</span><span class="p">:</span> <span class="n">low_threshold</span><span class="p">,</span> <span class="s2">&quot;high_threshold&quot;</span><span class="p">:</span> <span class="n">high_threshold</span><span class="p">,</span> <span class="s2">&quot;gee_scale&quot;</span><span class="p">:</span> <span class="n">gee_scale</span><span class="p">,</span>
         <span class="s2">&quot;overwrite&quot;</span><span class="p">:</span> <span class="n">overwrite</span><span class="p">,</span> <span class="s2">&quot;road_nodes_gdf&quot;</span><span class="p">:</span> <span class="n">tables</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;road_nodes_gdf&quot;</span><span class="p">),</span>
@@ -1085,7 +1149,7 @@ Visibility, use the <code>verdance</code> CLI.</p>
         <span class="s2">&quot;parks_sites_gdf&quot;</span><span class="p">:</span> <span class="n">tables</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;parks_sites_gdf&quot;</span><span class="p">),</span>
         <span class="s2">&quot;parks_access_gdf&quot;</span><span class="p">:</span> <span class="n">tables</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;parks_access_gdf&quot;</span><span class="p">),</span>
     <span class="p">}</span>
-    <span class="n">codes</span> <span class="o">=</span> <span class="nb">list</span><span class="p">([</span><span class="n">geo_code</span><span class="p">]</span> <span class="k">if</span> <span class="n">geo_code</span> <span class="k">else</span> <span class="n">tables</span><span class="p">[</span><span class="s2">&quot;census_boundaries_gdf&quot;</span><span class="p">][</span><span class="n">gl</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">())</span>
+    <span class="n">codes</span> <span class="o">=</span> <span class="nb">list</span><span class="p">([</span><span class="n">geo_code</span><span class="p">]</span> <span class="k">if</span> <span class="n">geo_code</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">tables</span><span class="p">[</span><span class="s2">&quot;census_boundaries_gdf&quot;</span><span class="p">][</span><span class="n">gl</span><span class="p">]</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span><span class="o">.</span><span class="n">unique</span><span class="p">())</span>
     <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
     <span class="n">results</span><span class="p">,</span> <span class="n">failed</span> <span class="o">=</span> <span class="p">{},</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">code</span> <span class="ow">in</span> <span class="n">codes</span><span class="p">:</span>
@@ -1101,6 +1165,7 @@ Visibility, use the <code>verdance</code> CLI.</p>
         <span class="n">output_dir</span><span class="p">,</span> <span class="n">process</span><span class="p">,</span> <span class="n">codes</span><span class="p">,</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">codes</span> <span class="k">if</span> <span class="n">c</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">failed</span><span class="p">],</span> <span class="n">failed</span><span class="p">,</span>
         <span class="n">cfg</span><span class="o">=</span><span class="n">cfg</span><span class="p">,</span> <span class="n">duration_s</span><span class="o">=</span><span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span><span class="p">,</span>
         <span class="n">extra</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;geo_level&quot;</span><span class="p">:</span> <span class="n">gl</span><span class="p">,</span> <span class="s2">&quot;sub_geo_level&quot;</span><span class="p">:</span> <span class="n">sgl</span><span class="p">,</span> <span class="s2">&quot;buffer&quot;</span><span class="p">:</span> <span class="n">buffer</span><span class="p">},</span>
+        <span class="n">merge_existing</span><span class="o">=</span><span class="p">(</span><span class="n">geo_code</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">),</span>
     <span class="p">)</span>
     <span class="k">return</span> <span class="n">results</span>
 </code></pre></div></td></tr></table></div>
@@ -1128,27 +1193,7 @@ here rather than part-way through a long Spark run.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>src/verdance/config/loader.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 44</span>
-<span class="normal"> 45</span>
-<span class="normal"> 46</span>
-<span class="normal"> 47</span>
-<span class="normal"> 48</span>
-<span class="normal"> 49</span>
-<span class="normal"> 50</span>
-<span class="normal"> 51</span>
-<span class="normal"> 52</span>
-<span class="normal"> 53</span>
-<span class="normal"> 54</span>
-<span class="normal"> 55</span>
-<span class="normal"> 56</span>
-<span class="normal"> 57</span>
-<span class="normal"> 58</span>
-<span class="normal"> 59</span>
-<span class="normal"> 60</span>
-<span class="normal"> 61</span>
-<span class="normal"> 62</span>
-<span class="normal"> 63</span>
-<span class="normal"> 64</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 64</span>
 <span class="normal"> 65</span>
 <span class="normal"> 66</span>
 <span class="normal"> 67</span>
@@ -1247,7 +1292,57 @@ here rather than part-way through a long Spark run.</p>
 <span class="normal">160</span>
 <span class="normal">161</span>
 <span class="normal">162</span>
-<span class="normal">163</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">VerdanceConfig</span><span class="p">:</span>
+<span class="normal">163</span>
+<span class="normal">164</span>
+<span class="normal">165</span>
+<span class="normal">166</span>
+<span class="normal">167</span>
+<span class="normal">168</span>
+<span class="normal">169</span>
+<span class="normal">170</span>
+<span class="normal">171</span>
+<span class="normal">172</span>
+<span class="normal">173</span>
+<span class="normal">174</span>
+<span class="normal">175</span>
+<span class="normal">176</span>
+<span class="normal">177</span>
+<span class="normal">178</span>
+<span class="normal">179</span>
+<span class="normal">180</span>
+<span class="normal">181</span>
+<span class="normal">182</span>
+<span class="normal">183</span>
+<span class="normal">184</span>
+<span class="normal">185</span>
+<span class="normal">186</span>
+<span class="normal">187</span>
+<span class="normal">188</span>
+<span class="normal">189</span>
+<span class="normal">190</span>
+<span class="normal">191</span>
+<span class="normal">192</span>
+<span class="normal">193</span>
+<span class="normal">194</span>
+<span class="normal">195</span>
+<span class="normal">196</span>
+<span class="normal">197</span>
+<span class="normal">198</span>
+<span class="normal">199</span>
+<span class="normal">200</span>
+<span class="normal">201</span>
+<span class="normal">202</span>
+<span class="normal">203</span>
+<span class="normal">204</span>
+<span class="normal">205</span>
+<span class="normal">206</span>
+<span class="normal">207</span>
+<span class="normal">208</span>
+<span class="normal">209</span>
+<span class="normal">210</span>
+<span class="normal">211</span>
+<span class="normal">212</span>
+<span class="normal">213</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">VerdanceConfig</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Load and validate a verdance YAML config into a `VerdanceConfig`.</span>
 
 <span class="sd">    Unknown keys, missing required sections and a geographic `crs` are rejected</span>
@@ -1262,36 +1357,56 @@ here rather than part-way through a long Spark run.</p>
 
     <span class="n">_require</span><span class="p">(</span><span class="n">raw</span><span class="p">,</span> <span class="s2">&quot;study_area_name&quot;</span><span class="p">,</span> <span class="s2">&quot;crs&quot;</span><span class="p">,</span> <span class="s2">&quot;data&quot;</span><span class="p">,</span> <span class="s2">&quot;columns&quot;</span><span class="p">,</span> <span class="s2">&quot;output&quot;</span><span class="p">)</span>
     <span class="n">_reject_unknown</span><span class="p">(</span><span class="n">raw</span><span class="p">,</span> <span class="p">{</span><span class="n">f</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">fields</span><span class="p">(</span><span class="n">VerdanceConfig</span><span class="p">)},</span> <span class="s2">&quot;top-level config&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">raw</span><span class="p">[</span><span class="s2">&quot;study_area_name&quot;</span><span class="p">],</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">raw</span><span class="p">[</span><span class="s2">&quot;study_area_name&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">strip</span><span class="p">():</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;study_area_name must be a non-empty string&quot;</span><span class="p">)</span>
 
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">raw</span><span class="p">[</span><span class="s2">&quot;data&quot;</span><span class="p">],</span> <span class="nb">dict</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Config section &#39;data&#39; must be a mapping, got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">raw</span><span class="p">[</span><span class="s1">&#39;data&#39;</span><span class="p">])</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
     <span class="n">data_raw</span> <span class="o">=</span> <span class="n">raw</span><span class="p">[</span><span class="s2">&quot;data&quot;</span><span class="p">]</span>
     <span class="n">_require_section</span><span class="p">(</span><span class="n">data_raw</span><span class="p">,</span> <span class="s2">&quot;data&quot;</span><span class="p">,</span> <span class="s2">&quot;buildings&quot;</span><span class="p">,</span> <span class="s2">&quot;parks_sites&quot;</span><span class="p">,</span> <span class="s2">&quot;parks_access&quot;</span><span class="p">,</span> <span class="s2">&quot;roads&quot;</span><span class="p">,</span> <span class="s2">&quot;census_boundaries&quot;</span><span class="p">)</span>
     <span class="n">_reject_unknown</span><span class="p">(</span><span class="n">data_raw</span><span class="p">,</span> <span class="p">{</span><span class="n">f</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">fields</span><span class="p">(</span><span class="n">DataPaths</span><span class="p">)},</span> <span class="s2">&quot;data&quot;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">req_key</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;buildings&quot;</span><span class="p">,</span> <span class="s2">&quot;parks_sites&quot;</span><span class="p">,</span> <span class="s2">&quot;parks_access&quot;</span><span class="p">,</span> <span class="s2">&quot;roads&quot;</span><span class="p">,</span> <span class="s2">&quot;census_boundaries&quot;</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data_raw</span><span class="p">[</span><span class="n">req_key</span><span class="p">],</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">data_raw</span><span class="p">[</span><span class="n">req_key</span><span class="p">]</span><span class="o">.</span><span class="n">strip</span><span class="p">():</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;data.</span><span class="si">{</span><span class="n">req_key</span><span class="si">}</span><span class="s2"> must be a non-empty string&quot;</span><span class="p">)</span>
 
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">raw</span><span class="p">[</span><span class="s2">&quot;columns&quot;</span><span class="p">],</span> <span class="nb">dict</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Config section &#39;columns&#39; must be a mapping, got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">raw</span><span class="p">[</span><span class="s1">&#39;columns&#39;</span><span class="p">])</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
     <span class="n">columns_raw</span> <span class="o">=</span> <span class="n">raw</span><span class="p">[</span><span class="s2">&quot;columns&quot;</span><span class="p">]</span>
     <span class="n">_require_section</span><span class="p">(</span><span class="n">columns_raw</span><span class="p">,</span> <span class="s2">&quot;columns&quot;</span><span class="p">,</span> <span class="s2">&quot;geo_levels&quot;</span><span class="p">)</span>
     <span class="n">_reject_unknown</span><span class="p">(</span><span class="n">columns_raw</span><span class="p">,</span> <span class="p">{</span><span class="n">f</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">fields</span><span class="p">(</span><span class="n">ColumnMapping</span><span class="p">)},</span> <span class="s2">&quot;columns&quot;</span><span class="p">)</span>
-    <span class="k">if</span> <span class="ow">not</span> <span class="n">columns_raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;geo_levels&quot;</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;columns.geo_levels must be a non-empty list&quot;</span><span class="p">)</span>
+    <span class="n">geo_levels</span> <span class="o">=</span> <span class="n">columns_raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;geo_levels&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="p">(</span>
+        <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">geo_levels</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span>
+        <span class="ow">or</span> <span class="ow">not</span> <span class="n">geo_levels</span>
+        <span class="ow">or</span> <span class="ow">not</span> <span class="nb">all</span><span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">g</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">and</span> <span class="n">g</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span> <span class="k">for</span> <span class="n">g</span> <span class="ow">in</span> <span class="n">geo_levels</span><span class="p">)</span>
+    <span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;columns.geo_levels must be a non-empty list of strings&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">geo_levels</span><span class="p">))</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">geo_levels</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;columns.geo_levels must not contain duplicate entries: </span><span class="si">{</span><span class="n">geo_levels</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">building_source</span><span class="p">(</span><span class="n">data_raw</span><span class="p">[</span><span class="s2">&quot;buildings&quot;</span><span class="p">])</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">columns_raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;building_id&quot;</span><span class="p">):</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;columns.building_id is required when data.buildings is a file path&quot;</span><span class="p">)</span>
 
     <span class="n">_validate_osm_sources</span><span class="p">(</span><span class="n">data_raw</span><span class="p">,</span> <span class="n">columns_raw</span><span class="p">)</span>
-    <span class="n">osm_cfg</span> <span class="o">=</span> <span class="n">_parse_osm_section</span><span class="p">(</span><span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;osm&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{})</span>
-    <span class="n">open_buildings_cfg</span> <span class="o">=</span> <span class="n">_parse_open_buildings_section</span><span class="p">(</span><span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;open_buildings&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{})</span>
-    <span class="n">overture_cfg</span> <span class="o">=</span> <span class="n">_parse_overture_section</span><span class="p">(</span><span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;overture&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{})</span>
-    <span class="n">tree_seg_cfg</span> <span class="o">=</span> <span class="n">_parse_tree_segmentation_section</span><span class="p">(</span><span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;tree_segmentation&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{})</span>
-    <span class="n">heights_cfg</span> <span class="o">=</span> <span class="n">_parse_heights_section</span><span class="p">(</span><span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;heights&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{})</span>
-    <span class="n">visibility_cfg</span> <span class="o">=</span> <span class="n">_parse_visibility_section</span><span class="p">(</span><span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;visibility&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{})</span>
+    <span class="n">osm_cfg</span> <span class="o">=</span> <span class="n">_parse_osm_section</span><span class="p">(</span><span class="n">_require_dict</span><span class="p">(</span><span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;osm&quot;</span><span class="p">),</span> <span class="s2">&quot;osm&quot;</span><span class="p">))</span>
+    <span class="n">open_buildings_cfg</span> <span class="o">=</span> <span class="n">_parse_open_buildings_section</span><span class="p">(</span><span class="n">_require_dict</span><span class="p">(</span><span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;open_buildings&quot;</span><span class="p">),</span> <span class="s2">&quot;open_buildings&quot;</span><span class="p">))</span>
+    <span class="n">overture_cfg</span> <span class="o">=</span> <span class="n">_parse_overture_section</span><span class="p">(</span><span class="n">_require_dict</span><span class="p">(</span><span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;overture&quot;</span><span class="p">),</span> <span class="s2">&quot;overture&quot;</span><span class="p">))</span>
+    <span class="n">tree_seg_cfg</span> <span class="o">=</span> <span class="n">_parse_tree_segmentation_section</span><span class="p">(</span><span class="n">_require_dict</span><span class="p">(</span><span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;tree_segmentation&quot;</span><span class="p">),</span> <span class="s2">&quot;tree_segmentation&quot;</span><span class="p">))</span>
+    <span class="n">heights_cfg</span> <span class="o">=</span> <span class="n">_parse_heights_section</span><span class="p">(</span><span class="n">_require_dict</span><span class="p">(</span><span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;heights&quot;</span><span class="p">),</span> <span class="s2">&quot;heights&quot;</span><span class="p">))</span>
+    <span class="n">visibility_cfg</span> <span class="o">=</span> <span class="n">_parse_visibility_section</span><span class="p">(</span><span class="n">_require_dict</span><span class="p">(</span><span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;visibility&quot;</span><span class="p">),</span> <span class="s2">&quot;visibility&quot;</span><span class="p">))</span>
     <span class="n">terrain_cfg</span> <span class="o">=</span> <span class="n">_parse_terrain_section</span><span class="p">(</span><span class="n">raw</span><span class="p">[</span><span class="s2">&quot;terrain&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;terrain&quot;</span> <span class="ow">in</span> <span class="n">raw</span> <span class="k">else</span> <span class="p">{})</span>
     <span class="n">context_buffer</span> <span class="o">=</span> <span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;context_buffer&quot;</span><span class="p">,</span> <span class="mf">100.0</span><span class="p">)</span>
-    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">context_buffer</span><span class="p">,</span> <span class="nb">bool</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">context_buffer</span><span class="p">,</span> <span class="p">(</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">))</span> <span class="ow">or</span> <span class="n">context_buffer</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">_is_num</span><span class="p">(</span><span class="n">context_buffer</span><span class="p">)</span> <span class="ow">or</span> <span class="n">context_buffer</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;context_buffer must be a non-negative number (metres), got </span><span class="si">{</span><span class="n">context_buffer</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
 
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">raw</span><span class="p">[</span><span class="s2">&quot;output&quot;</span><span class="p">],</span> <span class="nb">dict</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Config section &#39;output&#39; must be a mapping, got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">raw</span><span class="p">[</span><span class="s1">&#39;output&#39;</span><span class="p">])</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
     <span class="n">output_raw</span> <span class="o">=</span> <span class="n">raw</span><span class="p">[</span><span class="s2">&quot;output&quot;</span><span class="p">]</span>
     <span class="n">_require_section</span><span class="p">(</span><span class="n">output_raw</span><span class="p">,</span> <span class="s2">&quot;output&quot;</span><span class="p">,</span> <span class="s2">&quot;base_dir&quot;</span><span class="p">)</span>
     <span class="n">_reject_unknown</span><span class="p">(</span><span class="n">output_raw</span><span class="p">,</span> <span class="p">{</span><span class="n">f</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">fields</span><span class="p">(</span><span class="n">OutputPaths</span><span class="p">)},</span> <span class="s2">&quot;output&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">output_raw</span><span class="p">[</span><span class="s2">&quot;base_dir&quot;</span><span class="p">],</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">output_raw</span><span class="p">[</span><span class="s2">&quot;base_dir&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">strip</span><span class="p">():</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;output.base_dir must be a non-empty string&quot;</span><span class="p">)</span>
 
-    <span class="n">tile_raw</span> <span class="o">=</span> <span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;tile_system&quot;</span><span class="p">,</span> <span class="p">{})</span>
+    <span class="n">tile_raw</span> <span class="o">=</span> <span class="n">_require_dict</span><span class="p">(</span><span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;tile_system&quot;</span><span class="p">),</span> <span class="s2">&quot;tile_system&quot;</span><span class="p">)</span>
 
     <span class="k">try</span><span class="p">:</span>
         <span class="kn">from</span><span class="w"> </span><span class="nn">pyproj</span><span class="w"> </span><span class="kn">import</span> <span class="n">CRS</span>
@@ -1302,6 +1417,16 @@ here rather than part-way through a long Spark run.</p>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
             <span class="sa">f</span><span class="s2">&quot;crs &#39;</span><span class="si">{</span><span class="n">raw</span><span class="p">[</span><span class="s1">&#39;crs&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&#39; is geographic (degrees). verdance measures areas in m² and buffers in &quot;</span>
             <span class="s2">&quot;metres, so a projected/metric CRS is required — e.g. the local UTM zone or a national grid.&quot;</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">crs_obj</span><span class="o">.</span><span class="n">is_projected</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;crs &#39;</span><span class="si">{</span><span class="n">raw</span><span class="p">[</span><span class="s1">&#39;crs&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&#39; is not a projected CRS. verdance requires a projected metric CRS.&quot;</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="n">crs_obj</span><span class="o">.</span><span class="n">axis_info</span> <span class="ow">and</span> <span class="nb">any</span><span class="p">(</span><span class="nb">abs</span><span class="p">((</span><span class="n">ax</span><span class="o">.</span><span class="n">unit_conversion_factor</span> <span class="ow">or</span> <span class="mf">0.0</span><span class="p">)</span> <span class="o">-</span> <span class="mf">1.0</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mf">1e-6</span> <span class="k">for</span> <span class="n">ax</span> <span class="ow">in</span> <span class="n">crs_obj</span><span class="o">.</span><span class="n">axis_info</span><span class="p">[:</span><span class="mi">2</span><span class="p">]):</span>
+        <span class="n">units</span> <span class="o">=</span> <span class="p">[</span><span class="n">ax</span><span class="o">.</span><span class="n">unit_name</span> <span class="k">for</span> <span class="n">ax</span> <span class="ow">in</span> <span class="n">crs_obj</span><span class="o">.</span><span class="n">axis_info</span><span class="p">[:</span><span class="mi">2</span><span class="p">]]</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;crs &#39;</span><span class="si">{</span><span class="n">raw</span><span class="p">[</span><span class="s1">&#39;crs&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&#39; uses non-metric units (</span><span class="si">{</span><span class="n">units</span><span class="si">}</span><span class="s2">). verdance measures areas in m² and &quot;</span>
+            <span class="s2">&quot;buffers in metres, so a projected CRS in metres is required.&quot;</span>
         <span class="p">)</span>
 
     <span class="n">dggs</span><span class="p">,</span> <span class="n">dggs_resolution</span> <span class="o">=</span> <span class="n">_parse_dggs</span><span class="p">(</span><span class="n">raw</span><span class="p">)</span>

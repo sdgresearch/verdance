@@ -1443,6 +1443,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#verdance.config.schema.HeightSourceSpec.label" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        label
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3135,6 +3146,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#verdance.config.schema.HeightSourceSpec.label" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        label
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3490,11 +3512,7 @@ file; nested sections map to the dataclasses that follow.</p>
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>src/verdance/config/schema.py</code></summary>
-                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">293</span>
-<span class="normal">294</span>
-<span class="normal">295</span>
-<span class="normal">296</span>
-<span class="normal">297</span>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">297</span>
 <span class="normal">298</span>
 <span class="normal">299</span>
 <span class="normal">300</span>
@@ -3544,7 +3562,11 @@ file; nested sections map to the dataclasses that follow.</p>
 <span class="normal">344</span>
 <span class="normal">345</span>
 <span class="normal">346</span>
-<span class="normal">347</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="normal">347</span>
+<span class="normal">348</span>
+<span class="normal">349</span>
+<span class="normal">350</span>
+<span class="normal">351</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">VerdanceConfig</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;A complete verdance study-area configuration, loaded from YAML by</span>
 <span class="sd">    `verdance.load_config`.</span>
@@ -3553,7 +3575,7 @@ file; nested sections map to the dataclasses that follow.</p>
 <span class="sd">    &quot;&quot;&quot;</span>
 
     <span class="n">study_area_name</span><span class="p">:</span> <span class="nb">str</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Name of the study area, used in output filenames and the viz title.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Name of the study area, shown by `verdance validate` and used as the viz title.&quot;&quot;&quot;</span>
     <span class="n">crs</span><span class="p">:</span> <span class="nb">str</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Projected CRS in metres that every layer is reprojected to, e.g. `EPSG:32632`.</span>
 <span class="sd">    A geographic CRS is rejected: the buffers and areas verdance computes are metric.&quot;&quot;&quot;</span>
@@ -3578,7 +3600,7 @@ file; nested sections map to the dataclasses that follow.</p>
     <span class="n">dggs_resolution</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Resolution of the `dggs` grid; its meaning depends on the system chosen.&quot;&quot;&quot;</span>
     <span class="n">h3_resolution</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Deprecated: use `dggs: h3` with `dggs_resolution`. The loader normalizes it there.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Deprecated: use `dggs: h3` with `dggs_resolution`. The loader normalises it there.&quot;&quot;&quot;</span>
     <span class="n">tile_system</span><span class="p">:</span> <span class="n">TileSystemConfig</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="n">TileSystemConfig</span><span class="p">)</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Legacy UK VOM tile settings, parsed so older configs still load.&quot;&quot;&quot;</span>
     <span class="n">osm</span><span class="p">:</span> <span class="n">OSMConfig</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="n">OSMConfig</span><span class="p">)</span>
@@ -3628,7 +3650,7 @@ file; nested sections map to the dataclasses that follow.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Name of the study area, used in output filenames and the viz title.</p>
+        <p>Name of the study area, shown by <code>verdance validate</code> and used as the viz title.</p>
 
     </div>
 
@@ -3859,7 +3881,7 @@ guideline behind the 300 rule uses green spaces of at least 0.5-1 ha.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Deprecated: use <code>dggs: h3</code> with <code>dggs_resolution</code>. The loader normalizes it there.</p>
+        <p>Deprecated: use <code>dggs: h3</code> with <code>dggs_resolution</code>. The loader normalises it there.</p>
 
     </div>
 
@@ -4155,7 +4177,9 @@ and Visibility).</p>
 <span class="normal">126</span>
 <span class="normal">127</span>
 <span class="normal">128</span>
-<span class="normal">129</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="normal">129</span>
+<span class="normal">130</span>
+<span class="normal">131</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">DataPaths</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Where each input layer is read from: a file path, or a remote source name.&quot;&quot;&quot;</span>
 
@@ -4172,7 +4196,9 @@ and Visibility).</p>
     <span class="n">road_nodes</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Road nodes, when the road network is split across two files.&quot;&quot;&quot;</span>
     <span class="n">trees_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Directory of segmented tree crowns — written by `Trees`, read by T3 and Tree_count.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Single vector/parquet file or directory of segmented tree crowns — written by</span>
+<span class="sd">    `Trees`, read by `T3`, `Tree_count`, `Visibility`, and as a fallback by `T30` /</span>
+<span class="sd">    `T30_buildings` when no CHM source is configured.&quot;&quot;&quot;</span>
     <span class="n">chm_tiles_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Directory of canopy height model tiles. Suits survey tiles; globally-tiled</span>
 <span class="sd">    models belong in `meta_chm`, which reads only the boundary window.&quot;&quot;&quot;</span>
@@ -4358,7 +4384,9 @@ and Visibility).</p>
 
     <div class="doc doc-contents ">
 
-        <p>Directory of segmented tree crowns — written by <code>Trees</code>, read by T3 and Tree_count.</p>
+        <p>Single vector/parquet file or directory of segmented tree crowns — written by
+<code>Trees</code>, read by <code>T3</code>, <code>Tree_count</code>, <code>Visibility</code>, and as a fallback by <code>T30</code> /
+<code>T30_buildings</code> when no CHM source is configured.</p>
 
     </div>
 
@@ -5225,13 +5253,13 @@ e.g. <code>{ADM3_code: ADM3_name}</code> — used by the viz.</p>
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>src/verdance/config/schema.py</code></summary>
-                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">169</span>
-<span class="normal">170</span>
-<span class="normal">171</span>
-<span class="normal">172</span>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">172</span>
 <span class="normal">173</span>
 <span class="normal">174</span>
-<span class="normal">175</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="normal">175</span>
+<span class="normal">176</span>
+<span class="normal">177</span>
+<span class="normal">178</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">OutputPaths</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Where verdance writes its caches, intermediate CSVs and result tables.&quot;&quot;&quot;</span>
 
@@ -5315,9 +5343,7 @@ the merged result tables.</p>
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>src/verdance/config/schema.py</code></summary>
-                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">132</span>
-<span class="normal">133</span>
-<span class="normal">134</span>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">134</span>
 <span class="normal">135</span>
 <span class="normal">136</span>
 <span class="normal">137</span>
@@ -5331,7 +5357,10 @@ the merged result tables.</p>
 <span class="normal">145</span>
 <span class="normal">146</span>
 <span class="normal">147</span>
-<span class="normal">148</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="normal">148</span>
+<span class="normal">149</span>
+<span class="normal">150</span>
+<span class="normal">151</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">OSMConfig</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Options for layers sourced from OSM (data paths set to &quot;osm&quot;).&quot;&quot;&quot;</span>
 
@@ -5346,8 +5375,9 @@ the merged result tables.</p>
     <span class="n">exclude_private</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Drop parks tagged `access=private`, `no` or `customers`.&quot;&quot;&quot;</span>
     <span class="n">fetch_buffer</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2000</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Buffer in metres around the census boundary when fetching roads, parks and</span>
-<span class="sd">    access points, so the network can route to parks just outside the study area.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Buffer in metres around the census boundary when fetching OSM roads, parks and</span>
+<span class="sd">    access points, and also the search distance used by `T300` for file-based layers,</span>
+<span class="sd">    so the network can route to parks just outside the study area.&quot;&quot;&quot;</span>
 </code></pre></div></td></tr></table></div>
               </details>
 
@@ -5472,8 +5502,9 @@ None uses public-park defaults.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Buffer in metres around the census boundary when fetching roads, parks and
-access points, so the network can route to parks just outside the study area.</p>
+        <p>Buffer in metres around the census boundary when fetching OSM roads, parks and
+access points, and also the search distance used by <code>T300</code> for file-based layers,
+so the network can route to parks just outside the study area.</p>
 
     </div>
 
@@ -5520,14 +5551,14 @@ access points, so the network can route to parks just outside the study area.</p
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>src/verdance/config/schema.py</code></summary>
-                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">159</span>
-<span class="normal">160</span>
-<span class="normal">161</span>
-<span class="normal">162</span>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">162</span>
 <span class="normal">163</span>
 <span class="normal">164</span>
 <span class="normal">165</span>
-<span class="normal">166</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="normal">166</span>
+<span class="normal">167</span>
+<span class="normal">168</span>
+<span class="normal">169</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">OvertureConfig</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Options for layers sourced from Overture Maps (buildings or parks_sites set to &quot;overture&quot;).&quot;&quot;&quot;</span>
 
@@ -5614,12 +5645,12 @@ they are usually fenced or ticketed rather than open neighbourhood green space.<
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>src/verdance/config/schema.py</code></summary>
-                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">151</span>
-<span class="normal">152</span>
-<span class="normal">153</span>
-<span class="normal">154</span>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">154</span>
 <span class="normal">155</span>
-<span class="normal">156</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="normal">156</span>
+<span class="normal">157</span>
+<span class="normal">158</span>
+<span class="normal">159</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">OpenBuildingsConfig</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Options for buildings sourced from Google Open Buildings v3 (data.buildings: open_buildings).&quot;&quot;&quot;</span>
 
@@ -5702,10 +5733,7 @@ they are usually fenced or ticketed rather than open neighbourhood green space.<
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>src/verdance/config/schema.py</code></summary>
-                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">192</span>
-<span class="normal">193</span>
-<span class="normal">194</span>
-<span class="normal">195</span>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">195</span>
 <span class="normal">196</span>
 <span class="normal">197</span>
 <span class="normal">198</span>
@@ -5719,7 +5747,10 @@ they are usually fenced or ticketed rather than open neighbourhood green space.<
 <span class="normal">206</span>
 <span class="normal">207</span>
 <span class="normal">208</span>
-<span class="normal">209</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="normal">209</span>
+<span class="normal">210</span>
+<span class="normal">211</span>
+<span class="normal">212</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">TreeSegmentationConfig</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Options for the Trees process, which segments tree crowns from a CHM into data.trees_dir.&quot;&quot;&quot;</span>
 
@@ -5910,11 +5941,7 @@ use centroids only.</p>
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>src/verdance/config/schema.py</code></summary>
-                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">229</span>
-<span class="normal">230</span>
-<span class="normal">231</span>
-<span class="normal">232</span>
-<span class="normal">233</span>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">233</span>
 <span class="normal">234</span>
 <span class="normal">235</span>
 <span class="normal">236</span>
@@ -5927,7 +5954,11 @@ use centroids only.</p>
 <span class="normal">243</span>
 <span class="normal">244</span>
 <span class="normal">245</span>
-<span class="normal">246</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="normal">246</span>
+<span class="normal">247</span>
+<span class="normal">248</span>
+<span class="normal">249</span>
+<span class="normal">250</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">HeightsConfig</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Options for the Heights process, which attaches a height to every building footprint.&quot;&quot;&quot;</span>
 
@@ -6139,10 +6170,7 @@ must cover before it lends the footprint its height.</p>
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>src/verdance/config/schema.py</code></summary>
-                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">212</span>
-<span class="normal">213</span>
-<span class="normal">214</span>
-<span class="normal">215</span>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">215</span>
 <span class="normal">216</span>
 <span class="normal">217</span>
 <span class="normal">218</span>
@@ -6153,7 +6181,11 @@ must cover before it lends the footprint its height.</p>
 <span class="normal">223</span>
 <span class="normal">224</span>
 <span class="normal">225</span>
-<span class="normal">226</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="normal">226</span>
+<span class="normal">227</span>
+<span class="normal">228</span>
+<span class="normal">229</span>
+<span class="normal">230</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">HeightSourceSpec</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;One entry of heights.sources: a source name (see verdance.heights.SOURCE_NAMES) and its options.&quot;&quot;&quot;</span>
 
@@ -6167,6 +6199,7 @@ must cover before it lends the footprint its height.</p>
 
     <span class="nd">@property</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">label</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Display label for this height source (`name` if set, otherwise `source`).&quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">name</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">source</span>
 </code></pre></div></td></tr></table></div>
               </details>
@@ -6250,6 +6283,28 @@ Defaults to the source name.</p>
 
 </div>
 
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="verdance.config.schema.HeightSourceSpec.label" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">label</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#verdance.config.schema.HeightSourceSpec.label" class="headerlink" title="Permanent link">&para;</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Display label for this height source (<code>name</code> if set, otherwise <code>source</code>).</p>
+
+    </div>
+
+</div>
+
 
 
 
@@ -6291,11 +6346,7 @@ Defaults to the source name.</p>
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>src/verdance/config/schema.py</code></summary>
-                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">249</span>
-<span class="normal">250</span>
-<span class="normal">251</span>
-<span class="normal">252</span>
-<span class="normal">253</span>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">253</span>
 <span class="normal">254</span>
 <span class="normal">255</span>
 <span class="normal">256</span>
@@ -6319,7 +6370,11 @@ Defaults to the source name.</p>
 <span class="normal">274</span>
 <span class="normal">275</span>
 <span class="normal">276</span>
-<span class="normal">277</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="normal">277</span>
+<span class="normal">278</span>
+<span class="normal">279</span>
+<span class="normal">280</span>
+<span class="normal">281</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">VisibilityConfig</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Options for the Visibility process (line of sight from building windows to trees).&quot;&quot;&quot;</span>
 
@@ -6658,17 +6713,17 @@ and rasterised crowns otherwise; <code>chm</code> and <code>crowns</code> force 
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>src/verdance/config/schema.py</code></summary>
-                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">280</span>
-<span class="normal">281</span>
-<span class="normal">282</span>
-<span class="normal">283</span>
-<span class="normal">284</span>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">284</span>
 <span class="normal">285</span>
 <span class="normal">286</span>
 <span class="normal">287</span>
 <span class="normal">288</span>
 <span class="normal">289</span>
-<span class="normal">290</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="normal">290</span>
+<span class="normal">291</span>
+<span class="normal">292</span>
+<span class="normal">293</span>
+<span class="normal">294</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">TerrainConfig</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Ground elevation under buildings and trees for Visibility (raster engine).&quot;&quot;&quot;</span>
 
@@ -6784,10 +6839,7 @@ no longer change which tiles are read.</p>
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>src/verdance/config/schema.py</code></summary>
-                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">178</span>
-<span class="normal">179</span>
-<span class="normal">180</span>
-<span class="normal">181</span>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">181</span>
 <span class="normal">182</span>
 <span class="normal">183</span>
 <span class="normal">184</span>
@@ -6795,7 +6847,10 @@ no longer change which tiles are read.</p>
 <span class="normal">186</span>
 <span class="normal">187</span>
 <span class="normal">188</span>
-<span class="normal">189</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="normal">189</span>
+<span class="normal">190</span>
+<span class="normal">191</span>
+<span class="normal">192</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">TileSystemConfig</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Legacy UK VOM tile settings, parsed so older configs still load.</span>
 

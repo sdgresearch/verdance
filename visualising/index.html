@@ -871,27 +871,28 @@
 <p>All controls sit in a sidebar on the left, split into <strong>Map</strong> (basemap, parks, trees, boundary lines), <strong>Buildings</strong> (one value per footprint) and <strong>Areas</strong> (one value per census unit or grid cell); a card in the top-right corner summarises the whole study area — buildings, trees, parks counted, canopy cover of the whole study area (total canopy ÷ total measured area, from T30), medians of the rule's inputs and the share of buildings meeting 3, 30, 300 and all three. When Merge kept both "3" metrics, the card shows the rule with 3 = trees nearby and with 3 = trees in view, the one <code>--rule_t3_metric</code> chose first.</p>
 <ul>
 <li><strong>Buildings</strong> are coloured by any per-building metric (T3 tree counts, park distances, T30_buildings canopy, Visibility's trees in view — from any floor, from the ground floor, and the share of nearby trees in view — building heights and, after Merge, the <code>meets_*</code> rule flags, including the rule under each "3" metric). Each coloured layer has its own palette (ColorBrewer, viridis, magma, cividis; reversible) and classes: quantile, equal interval, natural breaks (Jenks), logarithmic, continuous rank-stretched colour (every part of a skewed distribution gets contrast) or <strong>rule threshold</strong>, with 3–9 classes. The rule threshold uses diverging colours centred on the 3-30-300 threshold (3 trees, 30 %, 300 m). A rule flag is drawn as a <strong>gradient of the value it tests</strong> — trees within the rule buffer, the canopy the rule used, the park distance, or for the combined rule the number of criteria met (0–3, counting the "3" of that rule) — with its pass/fail counts in the legend; switch to plain pass/fail there.</li>
-<li><strong>Areas</strong> (every census level, plus any DGGS grid already built, e.g. "H3 res 9") can be filled with a unit metric — Merge's table at its level, T30/Tree_count/Spectral at the sub-geo level, and averages of the building metrics at every level — or outlined. <strong>Boundaries</strong> toggles outlines of any number of levels at once, e.g. ward borders over an H3 fill. Set <code>columns.geo_level_labels</code> / <code>geo_level_names</code> to show levels and units by name.</li>
+<li><strong>Areas</strong> (every census level, plus any DGGS grid already built, e.g. "H3 res 9") can be filled with a unit metric — Merge's table at its level, T30/Tree_count/Spectral at the sub-geo level, and averages of the building metrics at every level — or outlined. <strong>Boundary lines</strong> toggles outlines of any number of levels at once, e.g. ward borders over an H3 fill. Set <code>columns.geo_level_labels</code> / <code>geo_level_names</code> to show levels and units by name.</li>
 <li><strong>Parks</strong> shows the green spaces T300 counts (solid; at least <code>park_min_area_ha</code>) and the smaller ignored ones (dashed); click one for its name and area.</li>
 <li><strong>Trees</strong> from <code>data.trees_dir</code> are drawn to scale (crown radius from the area column or polygon area) or as dots when only points are available. Green is reserved for trees and purple for parks; the default metric ramps are blues, red–blue and orange–brown.</li>
 <li>Drag across the legend histogram to show only a value range; click a feature for all of its values.</li>
 <li>Basemaps (no API keys): none, OpenFreeMap Positron or Liberty, OpenStreetMap, Esri World Imagery (sub-metre in most cities; Esri attribution, and Esri's terms expect an ArcGIS account beyond light non-commercial use), or Sentinel-2 imagery (EOX, 10 m, non-commercial).</li>
 </ul>
 <p>Merge is optional: module CSVs are read directly when its parquets are missing. The first start builds <code>database/viz.duckdb</code> (geometry reprojected and indexed, statistics precomputed), and later starts reuse it until an output changes; <code>--rebuild</code> forces a rebuild and <code>--no-trees</code> skips the tree layer. Buildings and trees appear from zoom 14 (a view about 3.5 km across), which keeps whole-city datasets responsive; zoomed further out, show units instead.</p>
-<p>The server listens on <code>127.0.0.1</code> only. On a remote machine, forward the port (<code>ssh -L 8765:localhost:8765 host</code>) and pass <code>--no-browser</code>. DuckDB downloads its spatial extension on first use; set <code>VERDANCE_DUCKDB_EXTENSIONS=/some/dir</code> if your home directory is full or read-only.</p>
+<p>The server listens on <code>127.0.0.1:8765</code> by default (<code>--host</code>, <code>--port</code> and <code>--log_level</code> override these). On a remote machine, forward the port (<code>ssh -L 8765:localhost:8765 host</code>) and pass <code>--no-browser</code>. DuckDB downloads its spatial extension on first use; set <code>VERDANCE_DUCKDB_EXTENSIONS=/some/dir</code> if your home directory is full or read-only.</p>
 <h2 id="output-layout">Output layout<a class="headerlink" href="#output-layout" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>&lt;output.base_dir&gt;/
-├── T3/            T3_&lt;code&gt;_&lt;buffer&gt;m.csv
-├── T30/           T30_&lt;code&gt;.csv
-├── T30_buildings/ T30_buildings_&lt;code&gt;_&lt;buffer&gt;m.csv
-├── T300/          T300_&lt;code&gt;.csv
-├── Tree_count/    Tree_count_&lt;code&gt;.csv
-├── Visibility/    Visibility_&lt;code&gt;_&lt;buffer&gt;m.csv (Visibility_vector/ with --vis_engine vector)
-├── Spectral/      Spectral_&lt;code&gt;.csv
+├── T3/            T3_&lt;code&gt;_&lt;buffer&gt;m.csv, _manifest.json
+├── T30/           T30_&lt;code&gt;.csv, _manifest.json
+├── T30_buildings/ T30_buildings_&lt;code&gt;_&lt;buffer&gt;m.csv, _manifest.json
+├── T300/          T300_&lt;code&gt;.csv, _manifest.json
+├── Tree_count/    Tree_count_&lt;code&gt;.csv, _manifest.json
+├── Visibility/    Visibility_&lt;code&gt;_&lt;buffer&gt;m.csv, _manifest.json (Visibility_vector/ with --vis_engine vector)
+├── Spectral/      Spectral_&lt;code&gt;.csv, _manifest.json
 ├── logs/          &lt;module&gt;_processing.log, viz.log
 ├── T30_h3_9/, Tree_count_h3_9/   same, per grid cell (runs with --dggs h3 --dggs_resolution 9)
 └── database/      parquet cache + consolidated outputs
     ├── chm_cache/                   ← download cache (unless data.chm_cache_dir or VERDANCE_CACHE_DIR is set)
+    ├── meta_canopy/, gee_canopy/    ← cached binary canopy masks for Meta / GEE canopy runs
     ├── building_heights_&lt;key&gt;.parquet ← one height per building (Heights; per-source caches in heights/)
     ├── context_buildings.parquet    ← footprints in the context_buffer ring (remote building sources)
     ├── T3_30_300_buildings.parquet  ← per-building 3-30-300 evaluation

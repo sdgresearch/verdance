@@ -931,7 +931,7 @@ below; on a shared machine or a small home directory, point the caches at a larg
 </thead>
 <tbody>
 <tr>
-<td>Results, parquet cache of the inputs, <code>viz.duckdb</code></td>
+<td>Results, parquet cache of the inputs, per-study-area canopy masks (<code>gee_canopy/</code>, <code>meta_canopy/</code>), <code>viz.duckdb</code></td>
 <td><code>&lt;output.base_dir&gt;/</code> and <code>&lt;output.base_dir&gt;/database/</code></td>
 <td><code>output.base_dir</code> in the config</td>
 </tr>
@@ -941,7 +941,7 @@ below; on a shared machine or a small home directory, point the caches at a larg
 <td>—</td>
 </tr>
 <tr>
-<td>Downloads shared between runs: canopy-height tiles, Earth Engine rasters (heights, terrain, canopy), OpenStreetMap responses</td>
+<td>Downloads shared between runs: canopy-height tiles, Earth Engine heights and terrain, OpenStreetMap responses</td>
 <td><code>&lt;output.base_dir&gt;/database/chm_cache/</code></td>
 <td><code>data.chm_cache_dir</code> in the config, else the <code>VERDANCE_CACHE_DIR</code> environment variable</td>
 </tr>
