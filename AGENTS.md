@@ -21,6 +21,7 @@ The canonical repo is `sdgresearch/verdance` (renamed from greenpy); `ancazugo/v
 
 - Remotes: `origin` = the fork (`git@github.com:ancazugo/verdance.git`), `upstream` = the org repo (`git@github.com:sdgresearch/verdance.git`). Local `master` tracks `upstream/master`.
 - Push branches to `origin` only, never to `upstream`; changes reach `sdgresearch/verdance` through pull requests from the fork.
+- The one exception is a release tag: `v*` tags go to `upstream`, because the release workflow and the PyPI Trusted Publisher are configured on `sdgresearch/verdance` and a tag pushed to the fork publishes nothing. See `docs/development.md`.
 - Start work on a new branch off an up-to-date `master`:
 
 ```bash

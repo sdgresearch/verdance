@@ -50,10 +50,13 @@ so no API token is stored anywhere. To cut one:
    there, so it is the only place the package version is set.
 2. Update `version` and `date-released` in `CITATION.cff`, and move the `[Unreleased]`
    section of `CHANGELOG.md` under the new version number.
-3. Open a pull request, and once it is merged tag the merge commit and push the tag:
+3. Open a pull request, and once it is merged tag the merge commit and push the tag
+   to the canonical repository, `sdgresearch/verdance` — the release workflow and the
+   PyPI Trusted Publisher live there, so a tag pushed to a fork publishes nothing:
 
    ```bash
-   git tag -a v<version> -m "v<version>" && git push upstream v<version>
+   git tag -a v<version> -m "v<version>"
+   git push <remote-for-sdgresearch> v<version>   # `upstream`, when working from a fork
    ```
 
 The tag triggers `.github/workflows/release.yml`, which builds the sdist and wheel and
