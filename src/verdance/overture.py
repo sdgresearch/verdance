@@ -2,10 +2,11 @@
 Building footprints and parks from Overture Maps (data.buildings / data.parks_sites: overture).
 
 Reads Overture's GeoParquet directly from its public S3 release via the
-`overturemaps` package. Coverage is global, but the building `height`
-attribute is sparse — many footprints (especially outside major cities) carry
-no height, and the Visibility module drops those buildings. Parks come from
-the base theme's land_use features (see overture.park_land_use).
+`overturemaps` package. Coverage is global, though the native building `height`
+attribute is sparse outside major cities — add height sources to
+`heights.sources` (e.g. `gba`, `ghs_built_h`) or rely on
+`heights.default_height` before running Visibility. Parks come from the base
+theme's land_use features (see overture.park_land_use).
 """
 
 import pandas as pd
@@ -40,6 +41,7 @@ def fetch_overture_buildings(polygon_4326: Polygon | MultiPolygon, crs: str) -> 
     """Fetch Overture building footprints with canonical columns `building_id`/`building_height`."""
     logger.info("Fetching Overture Maps buildings (GeoParquet from S3 — this can take a few minutes)")
     gdf = _read_overture("building", polygon_4326)
+    gdf = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
     if gdf.empty:
         raise ValueError("Overture returned no building footprints for the study area — check the boundary")
 
@@ -66,8 +68,13 @@ def fetch_overture_buildings(polygon_4326: Polygon | MultiPolygon, crs: str) -> 
 def select_parks(land_use: gpd.GeoDataFrame, park_land_use: list[str]) -> gpd.GeoDataFrame:
     """land_use polygons whose subtype or class is in park_land_use, as park_id/name/subtype/class."""
     wanted = set(park_land_use)
-    keep = land_use["subtype"].isin(wanted) | land_use["class"].isin(wanted)
+    subtype = land_use["subtype"] if "subtype" in land_use.columns else pd.Series(None, index=land_use.index)
+    cls = land_use["class"] if "class" in land_use.columns else pd.Series(None, index=land_use.index)
+    keep = subtype.isin(wanted) | cls.isin(wanted)
     parks = land_use[keep & land_use.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
+    for col in ("subtype", "class"):
+        if col not in parks.columns:
+            parks[col] = None
     names = parks["names"] if "names" in parks.columns else None
     parks["name"] = names.map(lambda n: n.get("primary") if isinstance(n, dict) else None) if names is not None else None
     parks = parks.rename(columns={"id": "park_id"})

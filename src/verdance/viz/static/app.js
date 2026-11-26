@@ -247,8 +247,8 @@ function classify(info, stats, s) {
   const k = Math.max(2, Math.min(9, s.k));
   const breaks = s.method === "equal" ? cleanBreaks(Array.from({ length: k - 1 }, (_, i) => lo + ((hi - lo) * (i + 1)) / k), stats)
     : s.method === "log" ? logBreaks(stats, k)
-    : s.method === "jenks" ? jenksBreaks(stats, k)
-    : quantileBreaks(stats, k);
+      : s.method === "jenks" ? jenksBreaks(stats, k)
+        : quantileBreaks(stats, k);
   return { breaks, colors: sample(ramp, breaks.length + 1) };
 }
 
@@ -349,12 +349,18 @@ function dataLayers() {
     const pv = { visibility: vis(state.parks.visible) };
     const used = ["==", ["get", "used"], true];
     layers.push(
-      { id: "gp-parks", type: "fill", source: "parks", "source-layer": "features", layout: pv,
-        paint: { "fill-color": PARK, "fill-opacity": ["case", used, 0.35, 0.08] } },
-      { id: "gp-parks-line", type: "line", source: "parks", "source-layer": "features", layout: pv, filter: used,
-        paint: { "line-color": PARK_LINE, "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.8, 16, 2] } },
-      { id: "gp-parks-small", type: "line", source: "parks", "source-layer": "features", layout: pv, filter: ["!", used],
-        paint: { "line-color": PARK, "line-width": 1, "line-dasharray": [2, 1.5], "line-opacity": 0.8 } },
+      {
+        id: "gp-parks", type: "fill", source: "parks", "source-layer": "features", layout: pv,
+        paint: { "fill-color": PARK, "fill-opacity": ["case", used, 0.35, 0.08] }
+      },
+      {
+        id: "gp-parks-line", type: "line", source: "parks", "source-layer": "features", layout: pv, filter: used,
+        paint: { "line-color": PARK_LINE, "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.8, 16, 2] }
+      },
+      {
+        id: "gp-parks-small", type: "line", source: "parks", "source-layer": "features", layout: pv, filter: ["!", used],
+        paint: { "line-color": PARK, "line-width": 1, "line-dasharray": [2, 1.5], "line-opacity": 0.8 }
+      },
     );
   }
   const b = drawn("buildings");
@@ -453,7 +459,11 @@ function restyle(t) {
 
 /* ---------- metric switching ---------- */
 
+const metricReq = { buildings: 0, units: 0 };
+let detailsReq = 0;
+
 async function setMetric(t, metric) {
+  const reqId = ++metricReq[t];
   const s = state[t];
   s.metric = metric;
   s.range = null;
@@ -466,7 +476,10 @@ async function setMetric(t, metric) {
   // would otherwise come from the old URL and lack the new metric
   const src = map.getSource(t);
   if (src && d.info) src.setTiles([tileUrl(d.layer, d.info.name)]);
-  [s.stats, s.flagStats] = await Promise.all([statsFor(d.layer, d.info && d.info.name), d.flag ? statsFor(d.layer, d.flag.name) : null]);
+  const [stats, flagStats] = await Promise.all([statsFor(d.layer, d.info && d.info.name), d.flag ? statsFor(d.layer, d.flag.name) : null]);
+  if (reqId !== metricReq[t]) return;
+  s.stats = stats;
+  s.flagStats = flagStats;
   restyle(t);
 }
 
@@ -671,6 +684,7 @@ function histogramBlock(t, info) {
     return Math.max(0, Math.min(n - 1, Math.floor(((ev.clientX - r.left) / r.width) * n)));
   };
   svg.addEventListener("pointerdown", ev => { start = binAt(ev); svg.setPointerCapture(ev.pointerId); });
+  svg.addEventListener("pointercancel", () => { start = null; });
   svg.addEventListener("pointerup", ev => {
     if (start === null) return;
     const [i, j] = [Math.min(start, binAt(ev)), Math.max(start, binAt(ev))];
@@ -800,6 +814,7 @@ function setSidebar(collapsed, save = true) {
 /* ---------- details ---------- */
 
 async function showDetails(feature) {
+  const reqId = ++detailsReq;
   const layerId = feature.layer.id;
   const body = $("details-body");
   if (layerId === "gp-parks") {
@@ -809,7 +824,7 @@ async function showDetails(feature) {
     body.innerHTML = `<h3></h3><div class="sub">park</div><table></table>`;
     body.querySelector("h3").textContent = p.name || "Unnamed park";
     const rows = [["Area", p.area_ha != null ? `${(+p.area_ha).toFixed(2)} ha` : "—"],
-      ["Counted for 300", p.used === true || p.used === "true" ? "yes" : `no (under ${min} ha)`]];
+    ["Counted for 300", p.used === true || p.used === "true" ? "yes" : `no (under ${min} ha)`]];
     body.querySelector("table").innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
   } else if (layerId === "gp-trees") {
     const p = feature.properties;
@@ -823,7 +838,7 @@ async function showDetails(feature) {
     const id = String(feature.id ?? feature.properties.id);
     state.selected = { layer, id };
     const data = await getJSON(`/api/feature/${encodeURIComponent(layer)}/${encodeURIComponent(id)}`);
-    if (!data) return;
+    if (!data || reqId !== detailsReq) return;
     const metrics = state.catalog.layers[layer].metrics;
     const current = isBuilding ? state.buildings.metric : state.units.metric;
     const metricNames = new Set(metrics.map(m => m.name));
@@ -851,6 +866,7 @@ async function showDetails(feature) {
 }
 
 function hideDetails() {
+  detailsReq++;
   $("details").hidden = true;
   state.selected = null;
   refreshLayer("selected");
@@ -890,13 +906,24 @@ function buildControls() {
   const lsel = $("unit-layer");
   for (const k of unitLayers) lsel.append(new Option(`${c.layers[k].label} · ${c.layers[k].metrics.length} metrics`, k, false, k === state.units.layer));
   lsel.onchange = async () => {
+    const reqId = ++metricReq.units;
     const u = state.units;
     u.layer = lsel.value;
     u.metric = defaultMetric(lsel.value);
     u.range = null;
+    u.hidden = new Set();
+    u.flagStats = null;
     fillMetricSelect($("unit-metric"), lsel.value, u.metric);
     const d = drawn("units");
-    u.stats = await statsFor(u.layer, d.info && d.info.name);
+    if (d.flag) u.method = "rule";
+    if (u.method === "rule" && (!d.info || d.info.threshold === null)) u.method = "quantile";
+    const [stats, flagStats] = await Promise.all([
+      statsFor(u.layer, d.info && d.info.name),
+      d.flag ? statsFor(u.layer, d.flag.name) : null,
+    ]);
+    if (reqId !== metricReq.units) return;
+    u.stats = stats;
+    u.flagStats = flagStats;
     applyStyle();
     renderPanel("units");
     saveView();
@@ -1005,6 +1032,7 @@ function loadView() {
 
 async function main() {
   const catalog = await getJSON("/api/catalog");
+  if (!catalog) throw new Error("Failed to load /api/catalog");
   state.catalog = catalog;
   document.title = `${catalog.study_area_name} · verdance`;
 
@@ -1035,10 +1063,14 @@ async function main() {
 
   const b = drawn("buildings"), u = drawn("units");
   if (b.flag && !saved.buildingStyle) state.buildings.method = "rule";
-  [state.buildings.stats, state.buildings.flagStats, state.units.stats] = await Promise.all([
+  if (state.buildings.method === "rule" && (!b.info || b.info.threshold === null)) state.buildings.method = "quantile";
+  if (u.flag && !saved.unitColours) state.units.method = "rule";
+  if (state.units.method === "rule" && (!u.info || u.info.threshold === null)) state.units.method = "quantile";
+  [state.buildings.stats, state.buildings.flagStats, state.units.stats, state.units.flagStats] = await Promise.all([
     b.info ? statsFor("buildings", b.info.name) : null,
     b.flag ? statsFor("buildings", b.flag.name) : null,
     u.info ? statsFor(state.units.layer, u.info.name) : null,
+    u.flag ? statsFor(state.units.layer, u.flag.name) : null,
   ]);
 
   setSidebar(loadPref("sidebarCollapsed") === true, false);

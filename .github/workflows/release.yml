@@ -13,8 +13,14 @@ name: Release
 # See https://docs.pypi.org/trusted-publishers/ for the exact steps.
 #
 # Cut a release by pushing an annotated tag that matches v* on a commit whose
-# src/verdance/__init__.py __version__ matches, e.g.:
-#   git tag -a v0.3.1 -m "verdance 0.3.1" && git push origin v0.3.1
+# src/verdance/__init__.py __version__ matches. The tag has to land on this
+# repository (sdgresearch/verdance), because that is where this workflow and the
+# PyPI Trusted Publisher are configured — a tag pushed to a fork publishes
+# nothing. Branches still only ever go to a fork; the version tag is the one
+# exception. From a maintainer's fork clone, that is the remote pointing at
+# sdgresearch/verdance (`upstream` in the layout AGENTS.md describes):
+#   git tag -a v0.4.0 -m "verdance 0.4.0"
+#   git push upstream v0.4.0
 
 on:
   push:
@@ -35,6 +41,29 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
+
+      - name: Verify tag matches package version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(python3 -c 'import re, pathlib; print(re.search(r"__version__\s*=\s*\"([^\"]+)\"", pathlib.Path("src/verdance/__init__.py").read_text()).group(1))')"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag v${TAG_VERSION} does not match src/verdance/__init__.py (__version__=${PKG_VERSION})" >&2
+            exit 1
+          fi
+
+      - name: Verify CITATION.cff matches the tag
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CFF_VERSION="$(sed -nE 's/^version:[[:space:]]*"?([^"]+)"?[[:space:]]*$/\1/p' CITATION.cff)"
+          if [ "$CFF_VERSION" != "$TAG_VERSION" ]; then
+            echo "CITATION.cff version=${CFF_VERSION} does not match tag v${TAG_VERSION}" >&2
+            exit 1
+          fi
+          CFF_DATE="$(sed -nE 's/^date-released:[[:space:]]*"?([0-9-]+)"?[[:space:]]*$/\1/p' CITATION.cff)"
+          if [ "$CFF_DATE" \> "$(date -u +%F)" ]; then
+            echo "CITATION.cff date-released=${CFF_DATE} is in the future" >&2
+            exit 1
+          fi
 
       - name: Build sdist and wheel
         run: uv build

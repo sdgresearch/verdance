@@ -1,7 +1,7 @@
 """Total tree count per census unit.
 
 Each tree is counted once, in the unit containing its centroid, with no size
-filter — unlike :mod:`verdance.t3`, which counts only trees above the height
+filter — unlike `verdance.t3`, which counts only trees above the height
 and area thresholds.
 """
 
@@ -11,11 +11,12 @@ import time
 import pandas as pd
 import geopandas as gpd
 from loguru import logger
+from pyspark.sql.dataframe import DataFrame
 from pyspark.sql.functions import monotonically_increasing_id
 from pyspark.sql.session import SparkSession
 
 from .config.schema import VerdanceConfig
-from .utils.data_processing import save_temp_file, get_geometries, load_trees_gdf, sql_str, view_suffix, drop_geo_views
+from .utils.data_processing import get_geometries, load_trees_gdf, sql_str, view_suffix, drop_geo_views, write_csv_atomic
 from .utils.sedona_rdd import create_spatial_rdds, count_trees_rdd
 
 
@@ -24,7 +25,7 @@ def concatenate_trees_for_boundary(
     geo_code: str,
     cfg: VerdanceConfig,
     geo_boundary_gdf: gpd.GeoDataFrame,
-) -> object:
+) -> DataFrame:
     """Load trees for the boundary and register the `geo_trees_<geo_code>` Spark temp view.
 
     Trees are reduced to their centroids (as in T3), so a crown straddling two
@@ -34,9 +35,18 @@ def concatenate_trees_for_boundary(
     logger.debug(f"Getting trees for {geo_code}")
 
     geo_trees_gdf = load_trees_gdf(Path(cfg.data.trees_dir), geo_boundary_gdf, cfg)
-    geo_trees_gdf = geo_trees_gdf[geo_trees_gdf.geometry.notna()].reset_index(drop=True)
-    geo_trees_gdf = gpd.GeoDataFrame(geometry=geo_trees_gdf.geometry.centroid, crs=cfg.crs)
-    geo_trees_sdf = sedona.createDataFrame(geo_trees_gdf).withColumn("tree_id", monotonically_increasing_id())
+    geo_trees_gdf = geo_trees_gdf[geo_trees_gdf.geometry.notna() & ~geo_trees_gdf.geometry.is_empty].copy()
+    if not geo_trees_gdf.empty:
+        geo_trees_gdf["_wkb"] = geo_trees_gdf.geometry.to_wkb()
+        geo_trees_gdf = geo_trees_gdf.drop_duplicates(subset="_wkb").drop(columns="_wkb").reset_index(drop=True)
+
+    if geo_trees_gdf.empty:
+        geo_trees_sdf = sedona.sql(
+            "SELECT CAST(NULL AS GEOMETRY) AS geometry, CAST(NULL AS BIGINT) AS tree_id WHERE 1 = 0"
+        )
+    else:
+        geo_trees_gdf = gpd.GeoDataFrame(geometry=geo_trees_gdf.geometry.centroid, crs=cfg.crs)
+        geo_trees_sdf = sedona.createDataFrame(geo_trees_gdf).withColumn("tree_id", monotonically_increasing_id())
     geo_trees_sdf.createOrReplaceTempView(f"geo_trees_{view_suffix(geo_code)}")
 
     return geo_trees_sdf
@@ -81,7 +91,8 @@ def process_geo_code(
         geo_tree_count_sdf = count_trees_rdd(
             sedona, sub_geo_rdd, geo_trees_rdd, sub_geo_level, using_index=True, unique_objects=True
         )
-        geo_tree_count_df = save_temp_file(geo_tree_count_sdf, out_path)
+        geo_tree_count_df = geo_tree_count_sdf.toPandas()
+        write_csv_atomic(geo_tree_count_df, out_path)
 
         end_time = time.time()
         logger.info(f"Tree_count: {geo_code} — {geo_tree_count_df['tree_count'].sum()} trees in {end_time - start_time:.2f}s")

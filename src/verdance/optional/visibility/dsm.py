@@ -38,6 +38,7 @@ class DSM:
 
     @property
     def terrain(self) -> bool:
+        """True when a ground elevation surface (`ground`) is attached."""
         return self.ground is not None
 
     def ground_at(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -73,6 +74,8 @@ def _burn_max(geoms, values, shape, transform, keep=None) -> np.ndarray:
     if len(geoms) == 0:
         return out
     keep = values > 0 if keep is None else keep
+    if not np.any(keep):
+        return out
     order = np.argsort(values, kind="stable")
     shapes = ((geoms[i], float(values[i])) for i in order if keep[i])
     return rasterio.features.rasterize(shapes, out=out, transform=transform, dtype="float32")

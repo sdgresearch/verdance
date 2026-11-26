@@ -10,6 +10,7 @@ import time
 import geopandas as gpd
 import osmnx as ox
 import pandas as pd
+import requests
 from loguru import logger
 from osmnx._errors import InsufficientResponseError, ResponseStatusCodeError
 from shapely.geometry import MultiPolygon, Polygon
@@ -63,6 +64,12 @@ def _overpass(query, *args, **kwargs):
             wait = OVERPASS_FIRST_WAIT * 2**attempt
             logger.warning(f"Overpass server busy (HTTP {code}); retrying in {wait} s ({attempt + 1}/{OVERPASS_RETRIES})")
             time.sleep(wait)
+        except (requests.Timeout, requests.ConnectionError) as e:
+            if attempt == OVERPASS_RETRIES:
+                raise
+            wait = OVERPASS_FIRST_WAIT * 2**attempt
+            logger.warning(f"Overpass network error ({e}); retrying in {wait} s ({attempt + 1}/{OVERPASS_RETRIES})")
+            time.sleep(wait)
 
 
 def use_cache_dir(path) -> None:
@@ -96,12 +103,39 @@ def _osm_ids(gdf: gpd.GeoDataFrame) -> pd.Series:
     return gdf["element"].astype(str) + "/" + gdf["id"].astype(str)
 
 
+_HEIGHT_FT_IN_RE = re.compile(r"^([0-9]+(?:[.,][0-9]+)?)\s*(?:'|ft|feet)\s*(?:([0-9]+(?:[.,][0-9]+)?)\s*(?:\"|in|inch|inches)?)?$")
+_HEIGHT_UNIT_RE = re.compile(r"^([0-9]+(?:[.,][0-9]+)?)\s*(m|meter|meters|metre|metres|cm|mm|in|inch|inches|\")?$")
+
+
+def _parse_single_osm_height(val) -> float:
+    if val is None or (isinstance(val, float) and pd.isna(val)) or pd.isna(val):
+        return float("nan")
+    s = str(val).strip().lower()
+    s = re.sub(r"\s*\([^)]*\)\s*$", "", s).strip()
+    if not s:
+        return float("nan")
+    m = _HEIGHT_FT_IN_RE.match(s)
+    if m:
+        ft = float(m.group(1).replace(",", "."))
+        inch = float(m.group(2).replace(",", ".")) if m.group(2) else 0.0
+        return ft * 0.3048 + inch * 0.0254
+    m = _HEIGHT_UNIT_RE.match(s)
+    if m:
+        num = float(m.group(1).replace(",", "."))
+        unit = m.group(2) or "m"
+        if unit in ("m", "meter", "meters", "metre", "metres"):
+            return num
+        if unit == "cm":
+            return num / 100.0
+        if unit == "mm":
+            return num / 1000.0
+        return num * 0.0254
+    return float("nan")
+
+
 def parse_osm_height(values: pd.Series) -> pd.Series:
-    """Metres from OSM height tags ("12", "12 m", "12.5m", "40'", "40 ft"); unparseable values become NaN."""
-    text = values.astype("string").str.strip().str.lower()
-    number = pd.to_numeric(text.str.extract(r"^([0-9]+(?:\.[0-9]+)?)", expand=False), errors="coerce")
-    feet = text.str.contains(r"'|ft|feet", regex=True, na=False)
-    return number.where(~feet, number * 0.3048).astype(float)
+    """Metres from OSM height tags ("12", "12 m", "12,5m", "250 cm", "40'", "12'6\"", "40 ft"); unparseable values become NaN."""
+    return pd.Series([_parse_single_osm_height(v) for v in values], index=values.index, dtype=float)
 
 
 def fetch_osm_buildings(polygon_4326: Polygon | MultiPolygon, building_types: list[str] | None, crs: str) -> gpd.GeoDataFrame:
@@ -117,7 +151,7 @@ def fetch_osm_buildings(polygon_4326: Polygon | MultiPolygon, building_types: li
         gdf = _overpass(ox.features_from_polygon, polygon_4326, tags).reset_index()
     except InsufficientResponseError:
         raise ValueError("OSM returned no buildings for the study area — check the boundary or osm.building_types")
-    gdf = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])]
+    gdf = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
     if gdf.empty:
         raise ValueError("OSM returned no building polygons for the study area — check the boundary or osm.building_types")
     gdf["building_id"] = _osm_ids(gdf)
@@ -141,7 +175,10 @@ def fetch_osm_roads(polygon_4326: Polygon | MultiPolygon, network_type: str, crs
     capture nearest-node snaps and make buildings unroutable.
     """
     logger.info(f"Fetching OSM road network (network_type: {network_type})")
-    graph = _overpass(ox.graph_from_polygon, polygon_4326, network_type=network_type, simplify=True)
+    try:
+        graph = _overpass(ox.graph_from_polygon, polygon_4326, network_type=network_type, simplify=True)
+    except InsufficientResponseError:
+        raise ValueError("OSM returned no roads for the study area — check the boundary or osm.network_type")
     nodes_gdf, edges_gdf = ox.graph_to_gdfs(graph)
 
     edges_gdf = edges_gdf.reset_index().rename(
@@ -169,9 +206,9 @@ def fetch_osm_parks(polygon_4326: Polygon | MultiPolygon, park_tags: dict | None
         gdf = _overpass(ox.features_from_polygon, polygon_4326, tags).reset_index()
     except InsufficientResponseError:
         raise ValueError("OSM returned no parks for the study area — check the boundary or osm.park_tags")
-    gdf = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])]
+    gdf = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
     if exclude_private and "access" in gdf.columns:
-        gdf = gdf[~gdf["access"].isin(PRIVATE_ACCESS_VALUES)]
+        gdf = gdf[~gdf["access"].isin(PRIVATE_ACCESS_VALUES)].copy()
     if gdf.empty:
         raise ValueError("OSM returned no public park polygons for the study area — check the boundary or osm.park_tags")
     gdf["park_id"] = _osm_ids(gdf)
@@ -206,6 +243,8 @@ def derive_park_access_points(
         )
         for row in snapped.itertuples():
             points[row.park_id].append(row.geometry)
+        for pid in snapped["park_id"].unique():
+            points[pid] = _thin_points(points[pid])
         logger.info(f"Matched {len(snapped)} OSM entrance nodes to {snapped['park_id'].nunique()} parks")
 
     remaining = boundaries[boundaries["park_id"].map(lambda pid: not points[pid])]
@@ -224,20 +263,29 @@ def derive_park_access_points(
         for i, pt in enumerate(park_points):
             records.append({"park_id": f"{park.park_id}_acc{i}", "park_access_ref": park.park_id, "geometry": pt})
 
-    access_gdf = gpd.GeoDataFrame(records, crs=crs)
+    if records:
+        access_gdf = gpd.GeoDataFrame(records, crs=crs)
+    else:
+        access_gdf = gpd.GeoDataFrame(
+            {"park_id": pd.Series(dtype=str), "park_access_ref": pd.Series(dtype=str)},
+            geometry=[],
+            crs=crs,
+        )
     logger.info(f"Derived {len(access_gdf)} park access points")
     return access_gdf
 
 
 def _fetch_entrance_nodes(polygon_4326: Polygon | MultiPolygon, crs: str) -> gpd.GeoDataFrame | None:
-    """Fetch OSM entrance/gate nodes; None when the area has none mapped."""
+    """Fetch public OSM gate/entrance nodes; None when the area has none mapped."""
     try:
-        gdf = _overpass(ox.features_from_polygon, polygon_4326, {"entrance": True, "barrier": ["gate", "entrance"]})
+        gdf = _overpass(ox.features_from_polygon, polygon_4326, {"barrier": ["gate", "entrance"]})
     except InsufficientResponseError:
         logger.info("No OSM entrance/gate nodes in the study area — using boundary/road intersections")
         return None
     gdf = gdf.reset_index()
     gdf = gdf[gdf.geometry.geom_type == "Point"]
+    if "access" in gdf.columns:
+        gdf = gdf[~gdf["access"].isin(PRIVATE_ACCESS_VALUES)]
     return gdf[["geometry"]].to_crs(crs)
 
 

@@ -27,44 +27,74 @@ def uses_terrain(cfg: VerdanceConfig) -> bool:
     return cfg.terrain.source is not None
 
 
+_DEM_SUFFIXES = (".tif", ".tiff", ".vrt", ".img")
+
+
 def dem_layers(cfg: VerdanceConfig, bounds: tuple) -> list[Path]:
     """DEM rasters covering bounds (cfg.crs): downloaded GEE tiles or the local DTM files."""
     source = cfg.terrain.source
     if source is None:
         return []
-    if source in DEM_SOURCES:
-        return _gee_dem(cfg, source, bounds)
+    key = source.strip().lower()
+    if key in DEM_SOURCES:
+        return _gee_dem(cfg, key, bounds)
     path = Path(source)
     if path.is_dir():
-        paths = sorted(path.rglob("*.tif"))
-    elif path.exists():
-        paths = [path]
-    else:
-        raise FileNotFoundError(
-            f"terrain.source {source!r} is neither one of {sorted(DEM_SOURCES)} nor an existing raster path"
-        )
-    if not paths:
-        raise FileNotFoundError(f"No .tif DEM rasters under {path}")
-    return paths
+        all_paths = sorted(p for p in path.rglob("*") if p.is_file() and p.suffix.lower() in _DEM_SUFFIXES)
+        if not all_paths:
+            raise FileNotFoundError(f"No DEM rasters ({_DEM_SUFFIXES}) under {path}")
+        import rasterio
+        from rasterio.warp import transform_bounds
+
+        minx, miny, maxx, maxy = bounds
+        paths = []
+        for p in all_paths:
+            try:
+                with rasterio.open(p) as src:
+                    b = transform_bounds(src.crs, cfg.crs, *src.bounds) if src.crs else tuple(src.bounds)
+                if b[2] >= minx and b[0] <= maxx and b[3] >= miny and b[1] <= maxy:
+                    paths.append(p)
+            except Exception:
+                continue
+        return paths
+    if path.exists():
+        return [path]
+    raise FileNotFoundError(
+        f"terrain.source {source!r} is neither one of {sorted(DEM_SOURCES)} nor an existing raster path"
+    )
 
 
 def _gee_dem(cfg: VerdanceConfig, source: str, bounds: tuple) -> list[Path]:
-    from .heights.gee import download_image_tiles, tag, tiles_for_extent
+    from pyproj import Transformer
+
+    from .heights.gee import TILE_PX, download_image_tiles, tag, tiles_for_extent
     from .utils.cache import cache_dir_for
 
     asset, band, is_collection, _ = DEM_SOURCES[source]
     res = float(cfg.terrain.resolution)
     out_dir = cache_dir_for(cfg) / "terrain" / source / tag({"asset": asset, "crs": cfg.crs, "res": res})
+    tiles = tiles_for_extent(bounds, res)
+    if not tiles:
+        return []
+
+    side = res * TILE_PX
+    minx_p = min(c for _, c in tiles) * side
+    maxx_p = (max(c for _, c in tiles) + 1) * side
+    miny_p = min(r for r, _ in tiles) * side
+    maxy_p = (max(r for r, _ in tiles) + 1) * side
+    b4326 = Transformer.from_crs(cfg.crs, "EPSG:4326", always_xy=True).transform_bounds(
+        minx_p, miny_p, maxx_p, maxy_p
+    )
 
     def image():
         import ee
 
         if is_collection:
-            col = ee.ImageCollection(asset).select(band)
+            region = ee.Geometry.Rectangle(list(b4326), proj="EPSG:4326", geodesic=False)
+            col = ee.ImageCollection(asset).filterBounds(region).select(band)
             img = col.mosaic().setDefaultProjection(col.first().projection())
         else:
             img = ee.Image(asset).select(band)
         return img.resample("bilinear").rename(band)
 
-    tiles = tiles_for_extent(bounds, res)
     return download_image_tiles(image, band, cfg.crs, res, tiles, out_dir, cfg.gee_project)

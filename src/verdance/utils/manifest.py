@@ -9,6 +9,8 @@ of what actually completed.
 """
 
 import json
+import os
+import threading
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from hashlib import sha1
@@ -37,8 +39,13 @@ def write_run_manifest(
     cfg=None,
     duration_s: float | None = None,
     extra: dict | None = None,
+    merge_existing: bool = False,
 ) -> Path:
-    """Write `<output_dir>/_manifest.json` and log a prominent error if any region failed.
+    """Write `<output_dir>/_manifest.json` atomically and log an error if any region failed.
+
+    When `merge_existing=True` (e.g. a single-`--geo_code` retry), results for
+    the attempted codes are merged into the existing manifest rather than
+    erasing previously recorded failures for other regions.
 
     Returns the manifest path. Codes are stringified so numeric census codes
     round-trip through JSON unchanged.
@@ -46,6 +53,20 @@ def write_run_manifest(
     attempted = [str(c) for c in attempted]
     succeeded = [str(c) for c in succeeded]
     failed = [str(c) for c in failed]
+
+    output_dir = Path(output_dir)
+    if merge_existing:
+        prev = read_run_manifest(output_dir)
+        if isinstance(prev, dict) and prev.get("process") == process:
+            new_ok = set(succeeded)
+            new_fail = set(failed)
+            prev_attempted = [str(c) for c in prev.get("attempted", [])]
+            prev_ok = [str(c) for c in prev.get("succeeded", []) if str(c) not in new_fail]
+            prev_fail = [str(c) for c in prev.get("failed", []) if str(c) not in new_ok]
+            attempted = list(dict.fromkeys(prev_attempted + attempted))
+            succeeded = list(dict.fromkeys(prev_ok + succeeded))
+            failed = list(dict.fromkeys(prev_fail + failed))
+
     manifest = {
         "process": process,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -60,12 +81,20 @@ def write_run_manifest(
     if duration_s is not None:
         manifest["duration_s"] = round(duration_s, 2)
     if extra:
-        manifest.update(extra)
+        # Never let extra metadata clobber core manifest fields
+        for k, v in extra.items():
+            if k not in manifest:
+                manifest[k] = v
 
-    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "_manifest.json"
-    path.write_text(json.dumps(manifest, indent=2))
+    tmp = output_dir / f"._manifest.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        tmp.write_text(json.dumps(manifest, indent=2))
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
 
     if failed:
         logger.error(f"{process}: {len(failed)}/{len(attempted)} regions FAILED: {failed} (see {path})")
@@ -80,8 +109,13 @@ def read_run_manifest(output_dir: Path) -> dict | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict):
+            logger.warning(f"Manifest {path} is not a JSON object — ignoring")
+            return None
+        return data
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Could not read manifest {path}: {e}")
         return None
 
 

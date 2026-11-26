@@ -23,6 +23,7 @@ from .utils.data_processing import (
     sql_str,
     view_suffix,
     drop_geo_views,
+    write_csv_atomic,
 )
 from .utils.sedona_rdd import create_spatial_rdds, count_trees_rdd
 
@@ -48,16 +49,29 @@ def read_trees_unique(
     logger.debug(f"Reading tree vector files for {geo_code}")
 
     geo_trees_gdf = load_trees_gdf(trees_dir, geo_boundary_gdf, cfg)
+    geo_trees_gdf = geo_trees_gdf[geo_trees_gdf.geometry.notna() & ~geo_trees_gdf.geometry.is_empty].copy()
 
-    geo_trees_sdf = sedona.createDataFrame(geo_trees_gdf)
-    if "geom" in geo_trees_sdf.columns:
-        geo_trees_sdf = geo_trees_sdf.withColumnRenamed("geom", "geometry")
-    geo_trees_sdf = (
-        geo_trees_sdf
-        .where(f"tree_area > {tree_area} AND tree_height > {tree_height} AND geometry IS NOT NULL")
-        .selectExpr("ST_Centroid(geometry) AS geometry", "tree_area", "tree_height")
-        .withColumn("tree_id", monotonically_increasing_id())
-    )
+    # Deduplicate trees that fell on shared boundaries between adjacent tree files
+    if not geo_trees_gdf.empty:
+        geo_trees_gdf["_wkb"] = geo_trees_gdf.geometry.to_wkb()
+        geo_trees_gdf = geo_trees_gdf.drop_duplicates(subset="_wkb").drop(columns="_wkb")
+
+    # Apply height and area filters in pandas before Spark so extra all-null columns or empty sets don't fail Spark inference
+    if "tree_height" in geo_trees_gdf.columns:
+        geo_trees_gdf = geo_trees_gdf[pd.to_numeric(geo_trees_gdf["tree_height"], errors="coerce") > tree_height]
+    if "tree_area" in geo_trees_gdf.columns:
+        geo_trees_gdf = geo_trees_gdf[pd.to_numeric(geo_trees_gdf["tree_area"], errors="coerce") > tree_area]
+
+    if geo_trees_gdf.empty:
+        geo_trees_sdf = sedona.sql(
+            "SELECT CAST(NULL AS GEOMETRY) AS geometry, CAST(NULL AS BIGINT) AS tree_id WHERE 1 = 0"
+        )
+    else:
+        centroids_gdf = gpd.GeoDataFrame(geometry=geo_trees_gdf.geometry.centroid, crs=cfg.crs).reset_index(drop=True)
+        geo_trees_sdf = (
+            sedona.createDataFrame(centroids_gdf)
+            .withColumn("tree_id", monotonically_increasing_id())
+        )
     geo_trees_sdf.createOrReplaceTempView(f"geo_trees_{view_suffix(geo_code)}")
 
     return geo_trees_sdf
@@ -172,7 +186,7 @@ def process_geo_code(
 
         geo_tree_count_df.rename(columns={"tree_count": f"tree_count_{buffer}m"}, inplace=True)
         geo_tree_count_df = _attach_sub_geo_level(sedona, geo_tree_count_df, geo_level, geo_code, sub_geo_level)
-        geo_tree_count_df.to_csv(out_path, index=False)
+        write_csv_atomic(geo_tree_count_df, out_path)
 
         end_time = time.time()
         logger.info(f"T3: {geo_code} — {len(geo_tree_count_df)} records in {end_time - start_time:.2f}s")

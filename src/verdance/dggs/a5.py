@@ -27,13 +27,31 @@ class A5System(PythonDGGS):
     ) -> Iterable[tuple[str, Polygon]]:
         import a5
 
-        parts = geom_wgs84.geoms if geom_wgs84.geom_type == "MultiPolygon" else [geom_wgs84]
+        if geom_wgs84 is None or geom_wgs84.is_empty:
+            return
+
+        def _polygons(geom):
+            if geom.is_empty:
+                return
+            if geom.geom_type == "Polygon":
+                yield geom
+            elif geom.geom_type in ("MultiPolygon", "GeometryCollection"):
+                for sub in geom.geoms:
+                    yield from _polygons(sub)
+
         base = set()
-        for part in parts:
-            rings = [list(part.exterior.coords)] + [list(r.coords) for r in part.interiors]
-            base.update(a5.uncompact(a5.polygon_to_cells(rings, resolution)))
+        for part in _polygons(geom_wgs84):
+            rings = (
+                [[(x, y) for x, y, *_ in part.exterior.coords]]
+                + [[(x, y) for x, y, *_ in r.coords] for r in part.interiors]
+            )
+            part_cells = set(a5.uncompact(a5.polygon_to_cells(rings, resolution)))
+            if not part_cells:
+                # part smaller than one cell — seed from its representative point
+                point = part.representative_point()
+                part_cells.add(a5.lonlat_to_cell((point.x, point.y), resolution))
+            base.update(part_cells)
         if not base:
-            # geometry smaller than one cell — seed from its representative point
             point = geom_wgs84.representative_point()
             base.add(a5.lonlat_to_cell((point.x, point.y), resolution))
         cells = set()

@@ -21,9 +21,12 @@ def list_cities(ctx: HeightContext, project: str | None) -> list[str]:
 
 
 class UTGlobusHeights(VectorHeightSource):
+    """UT-GLOBUS per-city vector building heights fetched from GEE."""
+
     license = "CC BY 4.0 (Kamath et al. 2024)"
 
     def fetch(self, buildings: gpd.GeoDataFrame, ctx: HeightContext) -> gpd.GeoDataFrame:
+        """Fetch UT-GLOBUS polygons for `options['city']` in the study-area CRS."""
         city = str(self.options["city"]).strip().lower()
         cities = list_cities(ctx, self.cfg.gee_project)
         if city not in cities:

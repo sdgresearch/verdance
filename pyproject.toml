@@ -88,15 +88,18 @@ path = "src/verdance/__init__.py"
 packages = ["src/verdance"]
 
 [tool.hatch.build.targets.sdist]
-# listed explicitly so untracked local files (city configs, notes) never ship
+# anchored with leading `/` so untracked local files (city configs, local venvs)
+# can never match at nested paths and ship in the sdist
 include = [
-    "src/verdance",
-    "tests",
-    "examples/generic.yaml",
-    "examples/osm.yaml",
-    "examples/open_buildings.yaml",
-    "README.md",
-    "LICENSE",
+    "/src/verdance",
+    "/tests",
+    "/examples/generic.yaml",
+    "/examples/osm.yaml",
+    "/examples/open_buildings.yaml",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+    "/CITATION.cff",
 ]
 
 [tool.pytest.ini_options]

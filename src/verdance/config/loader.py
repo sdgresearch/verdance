@@ -1,9 +1,10 @@
-"""Loading and validating a verdance YAML config into :class:`VerdanceConfig`.
+"""Loading and validating a verdance YAML config into `VerdanceConfig`.
 
 Unknown keys, missing required sections and a geographic CRS are rejected here,
 so a typo fails in seconds rather than part-way through a long Spark run.
 """
 
+import re
 from dataclasses import fields
 from pathlib import Path
 
@@ -34,6 +35,25 @@ from .schema import (
 VALID_NETWORK_TYPES = {"walk", "bike", "drive", "drive_service", "all", "all_public"}
 
 
+_SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _is_int(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _is_num(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _require_dict(value, name: str) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"Config section '{name}' must be a mapping, got {type(value).__name__}")
+    return value
+
+
 def _reject_unknown(section: dict, valid: set[str], where: str) -> None:
     """Raise if a config section has keys outside `valid` — catches typos like `contex_buffer`."""
     unknown = set(section) - valid
@@ -56,36 +76,56 @@ def load_config(path: str | Path) -> VerdanceConfig:
 
     _require(raw, "study_area_name", "crs", "data", "columns", "output")
     _reject_unknown(raw, {f.name for f in fields(VerdanceConfig)}, "top-level config")
+    if not isinstance(raw["study_area_name"], str) or not raw["study_area_name"].strip():
+        raise ValueError("study_area_name must be a non-empty string")
 
+    if not isinstance(raw["data"], dict):
+        raise ValueError(f"Config section 'data' must be a mapping, got {type(raw['data']).__name__}")
     data_raw = raw["data"]
     _require_section(data_raw, "data", "buildings", "parks_sites", "parks_access", "roads", "census_boundaries")
     _reject_unknown(data_raw, {f.name for f in fields(DataPaths)}, "data")
+    for req_key in ("buildings", "parks_sites", "parks_access", "roads", "census_boundaries"):
+        if not isinstance(data_raw[req_key], str) or not data_raw[req_key].strip():
+            raise ValueError(f"data.{req_key} must be a non-empty string")
 
+    if not isinstance(raw["columns"], dict):
+        raise ValueError(f"Config section 'columns' must be a mapping, got {type(raw['columns']).__name__}")
     columns_raw = raw["columns"]
     _require_section(columns_raw, "columns", "geo_levels")
     _reject_unknown(columns_raw, {f.name for f in fields(ColumnMapping)}, "columns")
-    if not columns_raw.get("geo_levels"):
-        raise ValueError("columns.geo_levels must be a non-empty list")
+    geo_levels = columns_raw.get("geo_levels")
+    if (
+        not isinstance(geo_levels, list)
+        or not geo_levels
+        or not all(isinstance(g, str) and g.strip() for g in geo_levels)
+    ):
+        raise ValueError("columns.geo_levels must be a non-empty list of strings")
+    if len(set(geo_levels)) != len(geo_levels):
+        raise ValueError(f"columns.geo_levels must not contain duplicate entries: {geo_levels}")
     if building_source(data_raw["buildings"]) is None and not columns_raw.get("building_id"):
         raise ValueError("columns.building_id is required when data.buildings is a file path")
 
     _validate_osm_sources(data_raw, columns_raw)
-    osm_cfg = _parse_osm_section(raw.get("osm") or {})
-    open_buildings_cfg = _parse_open_buildings_section(raw.get("open_buildings") or {})
-    overture_cfg = _parse_overture_section(raw.get("overture") or {})
-    tree_seg_cfg = _parse_tree_segmentation_section(raw.get("tree_segmentation") or {})
-    heights_cfg = _parse_heights_section(raw.get("heights") or {})
-    visibility_cfg = _parse_visibility_section(raw.get("visibility") or {})
+    osm_cfg = _parse_osm_section(_require_dict(raw.get("osm"), "osm"))
+    open_buildings_cfg = _parse_open_buildings_section(_require_dict(raw.get("open_buildings"), "open_buildings"))
+    overture_cfg = _parse_overture_section(_require_dict(raw.get("overture"), "overture"))
+    tree_seg_cfg = _parse_tree_segmentation_section(_require_dict(raw.get("tree_segmentation"), "tree_segmentation"))
+    heights_cfg = _parse_heights_section(_require_dict(raw.get("heights"), "heights"))
+    visibility_cfg = _parse_visibility_section(_require_dict(raw.get("visibility"), "visibility"))
     terrain_cfg = _parse_terrain_section(raw["terrain"] if "terrain" in raw else {})
     context_buffer = raw.get("context_buffer", 100.0)
-    if isinstance(context_buffer, bool) or not isinstance(context_buffer, (int, float)) or context_buffer < 0:
+    if not _is_num(context_buffer) or context_buffer < 0:
         raise ValueError(f"context_buffer must be a non-negative number (metres), got {context_buffer!r}")
 
+    if not isinstance(raw["output"], dict):
+        raise ValueError(f"Config section 'output' must be a mapping, got {type(raw['output']).__name__}")
     output_raw = raw["output"]
     _require_section(output_raw, "output", "base_dir")
     _reject_unknown(output_raw, {f.name for f in fields(OutputPaths)}, "output")
+    if not isinstance(output_raw["base_dir"], str) or not output_raw["base_dir"].strip():
+        raise ValueError("output.base_dir must be a non-empty string")
 
-    tile_raw = raw.get("tile_system", {})
+    tile_raw = _require_dict(raw.get("tile_system"), "tile_system")
 
     try:
         from pyproj import CRS
@@ -96,6 +136,16 @@ def load_config(path: str | Path) -> VerdanceConfig:
         raise ValueError(
             f"crs '{raw['crs']}' is geographic (degrees). verdance measures areas in m² and buffers in "
             "metres, so a projected/metric CRS is required — e.g. the local UTM zone or a national grid."
+        )
+    if not crs_obj.is_projected:
+        raise ValueError(
+            f"crs '{raw['crs']}' is not a projected CRS. verdance requires a projected metric CRS."
+        )
+    if crs_obj.axis_info and any(abs((ax.unit_conversion_factor or 0.0) - 1.0) > 1e-6 for ax in crs_obj.axis_info[:2]):
+        units = [ax.unit_name for ax in crs_obj.axis_info[:2]]
+        raise ValueError(
+            f"crs '{raw['crs']}' uses non-metric units ({units}). verdance measures areas in m² and "
+            "buffers in metres, so a projected CRS in metres is required."
         )
 
     dggs, dggs_resolution = _parse_dggs(raw)
@@ -204,7 +254,7 @@ def _parse_dggs(raw: dict) -> tuple[str | None, int | None]:
     if dggs not in SYSTEM_NAMES:
         raise ValueError(f"dggs must be one of {SYSTEM_NAMES}, got {dggs!r}")
     lo, hi = RESOLUTION_RANGES[dggs]
-    if not (isinstance(dggs_resolution, int) and lo <= dggs_resolution <= hi):
+    if not (_is_int(dggs_resolution) and lo <= dggs_resolution <= hi):
         raise ValueError(f"dggs_resolution for {dggs} must be an integer between {lo} and {hi}, got {dggs_resolution!r}")
     return dggs, dggs_resolution
 
@@ -269,14 +319,18 @@ def _parse_osm_section(osm_raw: dict) -> OSMConfig:
         raise ValueError("osm.park_tags must be a mapping of OSM key -> list of values")
 
     fetch_buffer = osm_raw.get("fetch_buffer", 2000)
-    if not isinstance(fetch_buffer, int) or fetch_buffer < 0:
+    if not _is_int(fetch_buffer) or fetch_buffer < 0:
         raise ValueError(f"osm.fetch_buffer must be a non-negative integer (metres), got {fetch_buffer!r}")
+
+    exclude_private = osm_raw.get("exclude_private", True)
+    if not isinstance(exclude_private, bool):
+        raise ValueError(f"osm.exclude_private must be true or false, got {exclude_private!r}")
 
     return OSMConfig(
         network_type=network_type,
         building_types=building_types,
         park_tags=park_tags,
-        exclude_private=osm_raw.get("exclude_private", True),
+        exclude_private=exclude_private,
         fetch_buffer=fetch_buffer,
     )
 
@@ -294,7 +348,7 @@ def _parse_overture_section(ov_raw: dict) -> OvertureConfig:
 def _parse_open_buildings_section(ob_raw: dict) -> OpenBuildingsConfig:
     _reject_unknown(ob_raw, {f.name for f in fields(OpenBuildingsConfig)}, "open_buildings")
     confidence_threshold = ob_raw.get("confidence_threshold", 0.7)
-    if not isinstance(confidence_threshold, (int, float)) or not (0 <= confidence_threshold < 1):
+    if not _is_num(confidence_threshold) or not (0 <= confidence_threshold < 1):
         raise ValueError(
             f"open_buildings.confidence_threshold must be a number in [0, 1), got {confidence_threshold!r}"
         )
@@ -320,13 +374,9 @@ def _parse_chm_overlap(value) -> str:
 
 
 def _parse_tree_segmentation_section(ts_raw: dict) -> TreeSegmentationConfig:
-    from dataclasses import fields
     from ..optional.tree_segmentation import PRESETS, SegmentationParams
 
-    known = {f.name for f in fields(TreeSegmentationConfig)}
-    unknown = set(ts_raw) - known
-    if unknown:
-        raise ValueError(f"Unknown tree_segmentation keys {sorted(unknown)}; expected {sorted(known)}")
+    _reject_unknown(ts_raw, {f.name for f in fields(TreeSegmentationConfig)}, "tree_segmentation")
     cfg = TreeSegmentationConfig(**ts_raw)
 
     if cfg.source not in (None, "chm_tiles", "meta"):
@@ -335,7 +385,7 @@ def _parse_tree_segmentation_section(ts_raw: dict) -> TreeSegmentationConfig:
         raise ValueError(f"tree_segmentation.preset must be one of {sorted(PRESETS)}, got {cfg.preset!r}")
     if cfg.geometry not in ("polygon", "point"):
         raise ValueError(f"tree_segmentation.geometry must be 'polygon' or 'point', got {cfg.geometry!r}")
-    if not isinstance(cfg.block_size, int) or cfg.block_size < 64:
+    if not _is_int(cfg.block_size) or cfg.block_size < 64:
         raise ValueError(f"tree_segmentation.block_size must be an integer >= 64, got {cfg.block_size!r}")
     param_names = {f.name for f in fields(SegmentationParams)}
     bad = set(cfg.params or {}) - param_names
@@ -359,8 +409,11 @@ def _parse_height_source(entry, i: int) -> HeightSourceSpec:
     name = options.pop("name", None)
     if source not in SOURCE_NAMES:
         raise ValueError(f"{where}: unknown height source {source!r}; expected one of {list(SOURCE_NAMES)}")
-    if name is not None and not (isinstance(name, str) and name):
-        raise ValueError(f"{where}.name must be a non-empty string, got {name!r}")
+    if name is not None:
+        if not (isinstance(name, str) and name and _SAFE_LABEL_RE.match(name) and name not in (".", "..")):
+            raise ValueError(
+                f"{where}.name must be a non-empty filename-safe identifier ([A-Za-z0-9._-]+), got {name!r}"
+            )
     unknown = set(options) - SOURCE_OPTIONS[source]
     if unknown:
         raise ValueError(
@@ -370,18 +423,16 @@ def _parse_height_source(entry, i: int) -> HeightSourceSpec:
     missing = REQUIRED_OPTIONS.get(source, set()) - set(options)
     if missing:
         raise ValueError(f"{where}: source {source!r} requires {sorted(missing)}")
+    for req_opt in REQUIRED_OPTIONS.get(source, set()):
+        if not isinstance(options[req_opt], str) or not options[req_opt].strip():
+            raise ValueError(f"{where}.{req_opt} must be a non-empty string, got {options[req_opt]!r}")
     if source == "file" and options.get("stat", "median") not in ("median", "mean", "max"):
         raise ValueError(f"{where}.stat must be 'median', 'mean' or 'max', got {options['stat']!r}")
     return HeightSourceSpec(source=source, options=options, name=name)
 
 
 def _parse_heights_section(h_raw: dict) -> HeightsConfig:
-    from dataclasses import fields
-
-    known = {f.name for f in fields(HeightsConfig)}
-    unknown = set(h_raw) - known
-    if unknown:
-        raise ValueError(f"Unknown heights keys {sorted(unknown)}; expected {sorted(known)}")
+    _reject_unknown(h_raw, {f.name for f in fields(HeightsConfig)}, "heights")
     defaults = HeightsConfig()
     sources_raw = h_raw.get("sources", ["native"])
     if not isinstance(sources_raw, list) or not sources_raw:
@@ -394,7 +445,7 @@ def _parse_heights_section(h_raw: dict) -> HeightsConfig:
     values = {}
     for key in ("default_height", "storey_height", "min_height", "max_height", "min_overlap"):
         v = h_raw.get(key, getattr(defaults, key))
-        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+        if not _is_num(v) or v < 0:
             raise ValueError(f"heights.{key} must be a non-negative number, got {v!r}")
         values[key] = float(v)
     if values["storey_height"] <= 0:
@@ -407,12 +458,7 @@ def _parse_heights_section(h_raw: dict) -> HeightsConfig:
 
 
 def _parse_visibility_section(v_raw: dict) -> VisibilityConfig:
-    from dataclasses import fields
-
-    known = {f.name for f in fields(VisibilityConfig)}
-    unknown = set(v_raw) - known
-    if unknown:
-        raise ValueError(f"Unknown visibility keys {sorted(unknown)}; expected {sorted(known)}")
+    _reject_unknown(v_raw, {f.name for f in fields(VisibilityConfig)}, "visibility")
     cfg = VisibilityConfig(**v_raw)
     if cfg.engine not in ("raster", "vector"):
         raise ValueError(f"visibility.engine must be 'raster' or 'vector', got {cfg.engine!r}")
@@ -420,17 +466,17 @@ def _parse_visibility_section(v_raw: dict) -> VisibilityConfig:
         raise ValueError(f"visibility.vegetation must be 'auto', 'chm' or 'crowns', got {cfg.vegetation!r}")
     for key in ("facade_spacing", "resolution", "tile_size"):
         v = getattr(cfg, key)
-        if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+        if not _is_num(v) or v <= 0:
             raise ValueError(f"visibility.{key} must be a positive number, got {v!r}")
     for key in ("facade_offset", "eye_height"):
         v = getattr(cfg, key)
-        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+        if not _is_num(v) or v < 0:
             raise ValueError(f"visibility.{key} must be a non-negative number, got {v!r}")
-    if not (isinstance(cfg.crown_points, int) and not isinstance(cfg.crown_points, bool) and cfg.crown_points >= 0):
+    if not (_is_int(cfg.crown_points) and cfg.crown_points >= 0):
         raise ValueError(f"visibility.crown_points must be a non-negative integer, got {cfg.crown_points!r}")
-    if not (isinstance(cfg.crown_point_height, (int, float)) and 0 < cfg.crown_point_height <= 1):
+    if not (_is_num(cfg.crown_point_height) and 0 < cfg.crown_point_height <= 1):
         raise ValueError(f"visibility.crown_point_height must be in (0, 1], got {cfg.crown_point_height!r}")
-    if cfg.end_skip is not None and not (isinstance(cfg.end_skip, (int, float)) and cfg.end_skip >= 0):
+    if cfg.end_skip is not None and not (_is_num(cfg.end_skip) and cfg.end_skip >= 0):
         raise ValueError(f"visibility.end_skip must be null or a non-negative number, got {cfg.end_skip!r}")
     if not isinstance(cfg.mask_chm_buildings, bool):
         raise ValueError("visibility.mask_chm_buildings must be true or false")
@@ -448,9 +494,9 @@ def _parse_terrain_section(t_raw) -> TerrainConfig:
     if unknown:
         raise ValueError(f"Unknown terrain keys {sorted(unknown)}; expected ['resolution', 'source']")
     cfg = TerrainConfig(**t_raw)
-    if cfg.source is not None and not isinstance(cfg.source, str):
-        raise ValueError(f"terrain.source must be one of {sorted(DEM_SOURCES)}, a raster path or null")
-    if isinstance(cfg.resolution, bool) or not isinstance(cfg.resolution, (int, float)) or cfg.resolution <= 0:
+    if cfg.source is not None and (not isinstance(cfg.source, str) or not cfg.source.strip()):
+        raise ValueError(f"terrain.source must be one of {sorted(DEM_SOURCES)}, a non-empty raster path or null")
+    if not _is_num(cfg.resolution) or cfg.resolution <= 0:
         raise ValueError(f"terrain.resolution must be a positive number (metres), got {cfg.resolution!r}")
     return cfg
 

@@ -77,8 +77,9 @@ def box_iou(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     iw = np.clip(np.minimum(a[..., 2], b[..., 2]) - np.maximum(a[..., 0], b[..., 0]), 0, None)
     ih = np.clip(np.minimum(a[..., 3], b[..., 3]) - np.maximum(a[..., 1], b[..., 1]), 0, None)
     inter = iw * ih
-    area = lambda x: (x[..., 2] - x[..., 0]) * (x[..., 3] - x[..., 1])
-    return inter / (area(a) + area(b) - inter)
+    area = lambda x: np.clip(x[..., 2] - x[..., 0], 0, None) * np.clip(x[..., 3] - x[..., 1], 0, None)
+    union = np.maximum(area(a) + area(b) - inter, 0.0)
+    return np.divide(inter, union, out=np.zeros_like(inter), where=union > 0)
 
 
 def box_scores(pred_boxes, gt_boxes, iou_threshold: float = 0.4) -> dict:

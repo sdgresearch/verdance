@@ -43,6 +43,30 @@ An ordered chain of sources; for each building the first valid height wins.
     options:
       heading_level: 3
 
+::: verdance.heights.native
+    options:
+      heading_level: 3
+
+::: verdance.heights.gba
+    options:
+      heading_level: 3
+
+::: verdance.heights.utglobus
+    options:
+      heading_level: 3
+
+::: verdance.heights.open_buildings_temporal
+    options:
+      heading_level: 3
+
+::: verdance.heights.ghs
+    options:
+      heading_level: 3
+
+::: verdance.heights.file
+    options:
+      heading_level: 3
+
 ## Terrain
 
 ::: verdance.terrain

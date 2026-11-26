@@ -15,10 +15,8 @@ from tqdm import tqdm
 
 from .config.loader import load_config
 from .dggs import RESOLUTION_RANGES, SYSTEM_NAMES, get_system
-from .pipeline import load_tables, setup_output_dirs, unit_output_name
 from .utils.logging_config import setup_logger
 from .utils.manifest import write_run_manifest
-from .utils.sedona_config import get_spark
 
 app = typer.Typer(help="verdance: 3-30-300 urban greening metrics")
 
@@ -48,22 +46,18 @@ def _callback(
     """verdance: 3-30-300 urban greening metrics."""
 
 
-# Per-geo dispatch map and helper are shared with the programmatic API (verdance.run)
-from .api import PROCESS_FNS as _PROCESS_FNS
-from .api import run_process_code as _run_process
-
 # Flags that tune a per-geo-code module; warned about when the chosen process ignores them
 _TUNABLE_FLAGS = {"buffer", "tree_area", "tree_height", "low_threshold", "high_threshold", "gee_scale", "query_method"}
 
 
-def _warn_ignored_flags(process: str) -> None:
+def _warn_ignored_flags(process: str, process_fns: dict) -> None:
     """Warn once when the user set --flags the chosen process silently ignores (dispatch drops them)."""
     import sys
 
-    if process not in _PROCESS_FNS:
+    if process not in process_fns:
         return
     passed = {arg[2:].split("=")[0].replace("-", "_") for arg in sys.argv if arg.startswith("--")}
-    accepted = set(inspect.signature(_PROCESS_FNS[process]).parameters)
+    accepted = set(inspect.signature(process_fns[process]).parameters)
     ignored = (passed & _TUNABLE_FLAGS) - accepted
     if ignored:
         logger.warning(f"{process} ignores these flags you set: {sorted('--' + f for f in ignored)}")
@@ -80,14 +74,14 @@ def run(
     h3_resolution: Optional[int] = typer.Option(None, "--h3_resolution", help="[deprecated] Alias for --dggs h3 --dggs_resolution N"),
     geo_code: Optional[str] = typer.Option(None, "--geo_code", help="Single geography code to process; omit to process all"),
     query_method: str = typer.Option("sql", "--query_method", help="Sedona join strategy for T3: sql (default; indexed join, counts every building) or rdd (omits buildings with no tree in range)"),
-    buffer: int = typer.Option(100, "--buffer", help="Buffer radius in metres around each building (T3, T30_buildings; 0 = footprint only)"),
+    buffer: int = typer.Option(100, "--buffer", help="Buffer radius in metres around each building (T3, T30_buildings, Visibility; 0 = footprint only)"),
     tree_area: int = typer.Option(10, "--tree_area", help="Trees count only if canopy area (m²) is strictly greater than this (T3, Visibility)"),
     tree_height: int = typer.Option(3, "--tree_height", help="Trees count only if height (m) is strictly greater than this (T3, Visibility)"),
     vis_engine: Optional[str] = typer.Option(None, "--vis_engine", help="Visibility engine: raster (DSM ray casting, default) or vector (exact Sedona geometry, small areas); overrides visibility.engine"),
     observer_mode: Optional[str] = typer.Option(None, "--observer_mode", help="[deprecated, ignored] Visibility observers are facade points at every floor (see the visibility config section)"),
-    low_threshold: int = typer.Option(3, "--low_threshold", help="Min canopy height in metres for T30 binarisation"),
-    high_threshold: int = typer.Option(60, "--high_threshold", help="Max canopy height in metres for T30 binarisation"),
-    gee_scale: float = typer.Option(1.0, "--gee_scale", help="Download scale in metres for the T30 GEE canopy source (coarser scales store canopy fraction per pixel)"),
+    low_threshold: int = typer.Option(3, "--low_threshold", help="Min canopy height in metres for T30 / T30_buildings binarisation"),
+    high_threshold: int = typer.Option(60, "--high_threshold", help="Max canopy height in metres for T30 / T30_buildings binarisation"),
+    gee_scale: float = typer.Option(1.0, "--gee_scale", help="Download scale in metres for the T30 / T30_buildings GEE canopy source (coarser scales store canopy fraction per pixel)"),
     start_date: str = typer.Option("2024-01-01", "--start_date", help="GEE imagery start date"),
     end_date: str = typer.Option("2024-12-31", "--end_date", help="GEE imagery end date"),
     imagery_ee_path: str = typer.Option("COPERNICUS/S2_HARMONIZED", "--imagery_ee_path", help="GEE imagery collection path"),
@@ -140,6 +134,10 @@ def run(
         typer.echo(f"Error: --composite must be 'max' or 'median', got '{composite}'", err=True)
         raise typer.Exit(1)
 
+    if n_workers < 1:
+        typer.echo(f"Error: --n_workers must be >= 1, got {n_workers}", err=True)
+        raise typer.Exit(1)
+
     if observer_mode is not None:
         logger.warning("--observer_mode is deprecated and ignored: observers are facade points at every floor")
     vis_engine = vis_engine or cfg.visibility.engine
@@ -161,7 +159,9 @@ def run(
     dggs_from_cli = dggs is not None or dggs_resolution is not None
     if dggs is None:
         dggs = cfg.dggs
-    if dggs_resolution is None:
+        if dggs_resolution is None:
+            dggs_resolution = cfg.dggs_resolution
+    elif dggs_resolution is None and dggs == cfg.dggs:
         dggs_resolution = cfg.dggs_resolution
     if (dggs is None) != (dggs_resolution is None):
         typer.echo("Error: --dggs and --dggs_resolution must be provided together (or via config)", err=True)
@@ -185,6 +185,9 @@ def run(
             typer.echo("Error: --sub_geo_level cannot be combined with --dggs (grid cells replace the sub-geography)", err=True)
             raise typer.Exit(1)
         sub_geo_level = get_system(dggs).column_name(dggs_resolution)
+    elif sub_geo_level and sub_geo_level not in geo_levels:
+        typer.echo(f"Error: --sub_geo_level '{sub_geo_level}' not in config.columns.geo_levels: {geo_levels}", err=True)
+        raise typer.Exit(1)
 
     log_dir = Path(cfg.output.base_dir) / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -192,6 +195,8 @@ def run(
 
     if process == "Merge":
         from .merge import merge_output_csv, process_data
+        from .utils.sedona_config import get_spark
+
         sedona = get_spark()
         merge_output_csv(sedona, cfg, t3_buffers, dggs=dggs, dggs_resolution=dggs_resolution)
         if dggs is not None:
@@ -223,27 +228,51 @@ def run(
         return
 
     if process == "Spectral":
-        from .optional.spectral import setup_gee, process_geo_code as process_spectral
+        import geopandas as gpd
+
+        from .optional.spectral import process_geo_code as process_spectral, setup_gee
+        from .pipeline import _read_vector, setup_output_dirs
+
         if not cfg.gee_boundaries_asset:
             typer.echo("Error: Spectral requires gee_boundaries_asset in the config", err=True)
             raise typer.Exit(1)
-        sedona = get_spark()
-        # Spectral aggregates on a GEE boundaries asset: no roads or parks needed
-        tables = load_tables(sedona, cfg, load_roads_parks=False)
-        setup_gee(cfg.gee_project)
+        dirs = setup_output_dirs(cfg)
+        census_parquet = dirs["database"] / "census_boundaries.parquet"
         spectral_geo_level = geo_level or geo_levels[0]
-        codes = [geo_code] if geo_code else tables["census_boundaries_gdf"][spectral_geo_level].unique()
+        if geo_code is not None:
+            codes = [geo_code]
+        elif census_parquet.exists():
+            codes = list(gpd.read_parquet(census_parquet, columns=[spectral_geo_level])[spectral_geo_level].dropna().unique())
+        else:
+            codes = list(_read_vector(cfg.data.census_boundaries)[spectral_geo_level].dropna().unique())
+        setup_gee(cfg.gee_project)
+        start = time.time()
+        succeeded, failed = [], []
         for code in tqdm(codes, desc="Regions"):
-            process_spectral(
-                code, spectral_geo_level, sub_geo_level or geo_levels[-1],
-                imagery_ee_path, start_date, end_date, cloud_coverage,
-                spectral_indexes,
-                output_dir=tables["output_dirs"]["spectral"],
-                composite=composite,
-                gee_boundaries_asset=cfg.gee_boundaries_asset,
-                overwrite=overwrite,
-            )
+            try:
+                res = process_spectral(
+                    code, spectral_geo_level, sub_geo_level or geo_levels[-1],
+                    imagery_ee_path, start_date, end_date, cloud_coverage,
+                    spectral_indexes,
+                    output_dir=dirs["spectral"],
+                    composite=composite,
+                    gee_boundaries_asset=cfg.gee_boundaries_asset,
+                    overwrite=overwrite,
+                )
+                (succeeded if res is not None else failed).append(code)
+            except Exception:
+                logger.exception(f"Spectral: error processing {code}")
+                failed.append(code)
+        write_run_manifest(
+            dirs["spectral"], "Spectral", codes, succeeded, failed, cfg=cfg, duration_s=time.time() - start,
+            extra={"geo_level": spectral_geo_level, "sub_geo_level": sub_geo_level or geo_levels[-1]},
+            merge_existing=(geo_code is not None),
+        )
         return
+
+    from .api import PROCESS_FNS as _PROCESS_FNS, run_process_code as _run_process
+    from .pipeline import load_tables, unit_output_name
+    from .utils.sedona_config import get_spark
 
     sedona = get_spark()
     # only T300 walks the road network and parks; the rest skip ~900 MB of reads
@@ -264,6 +293,7 @@ def run(
         "sub_geo_level": sub_geo_level or (geo_levels[-1] if len(geo_levels) > 1 else geo_levels[0]),
         "cfg": cfg,
         "output_dir": output_dir,
+        "overlay_path": tables.get("overlay_path"),
         "query_method": query_method,
         "buffer": buffer,
         "tree_area": tree_area,
@@ -280,8 +310,8 @@ def run(
         "parks_access_gdf": tables.get("parks_access_gdf"),
     }
 
-    _warn_ignored_flags(process)
-    codes = list([geo_code] if geo_code else tables["census_boundaries_gdf"][geo_level or geo_levels[0]].unique())
+    _warn_ignored_flags(process, _PROCESS_FNS)
+    codes = list([geo_code] if geo_code is not None else tables["census_boundaries_gdf"][geo_level or geo_levels[0]].dropna().unique())
     logger.info(f"Running {process} for {len(codes)} regions")
 
     start = time.time()
@@ -313,6 +343,7 @@ def run(
     write_run_manifest(
         output_dir, process, codes, succeeded, failed, cfg=cfg, duration_s=time.time() - start,
         extra={"geo_level": args_dict["geo_level"], "sub_geo_level": args_dict["sub_geo_level"], "buffer": buffer},
+        merge_existing=(geo_code is not None),
     )
     logger.info(f"{process} completed: {len(succeeded)}/{len(codes)} regions")
 
@@ -320,7 +351,7 @@ def run(
 def _run_heights(cfg, overwrite: bool) -> None:
     """Attach a height to every building from the heights.sources chain (no Spark needed)."""
     from .heights.enrich import build_building_heights
-    from .pipeline import _setup_parquet_files, ensure_context_buildings
+    from .pipeline import _setup_parquet_files, ensure_context_buildings, setup_output_dirs
 
     db_dir = setup_output_dirs(cfg)["database"]
     if not (db_dir / "buildings.parquet").exists():
@@ -343,7 +374,7 @@ def _run_visibility_raster(
     from .optional.visibility.inputs import VisibilityInputs
     from .optional.visibility.params import VisibilityParams
     from .optional.visibility.raster_engine import process_geo_code_raster
-    from .pipeline import _setup_parquet_files, ensure_dggs_files
+    from .pipeline import _setup_parquet_files, build_buildings_overlay, ensure_dggs_files, setup_output_dirs
 
     if not cfg.data.trees_dir:
         raise typer.BadParameter("Visibility needs data.trees_dir (tree crowns with heights)")
@@ -353,23 +384,31 @@ def _run_visibility_raster(
         _setup_parquet_files(cfg, db_dir)
     boundaries_path, overlay_path = db_dir / "census_boundaries.parquet", db_dir / "census_buildings_overlay.parquet"
     if dggs is not None:
+        from .utils.sedona_config import get_spark
+
         boundaries_path, overlay_path = ensure_dggs_files(get_spark(), db_dir, cfg, dggs, dggs_resolution)
+    elif not overlay_path.exists():
+        build_buildings_overlay(db_dir, cfg)
 
     numba.set_num_threads(min(n_threads or min(os.cpu_count() or 1, 16), numba.config.NUMBA_NUM_THREADS))
     params = VisibilityParams.from_cfg(cfg, buffer, tree_area, tree_height)
     inputs = VisibilityInputs.load(cfg, overlay_path)
-    codes = [geo_code] if geo_code else pd.read_parquet(boundaries_path, columns=[geo_level])[geo_level].dropna().unique()
+    codes = list([geo_code] if geo_code is not None else pd.read_parquet(boundaries_path, columns=[geo_level])[geo_level].dropna().unique())
     logger.info(f"Visibility (raster): {len(codes)} regions, buffer {buffer} m, {numba.get_num_threads()} threads")
     start = time.time()
-    codes = list(codes)
-    failed = [
-        code for code in tqdm(codes, desc="Regions")
-        if process_geo_code_raster(geo_level, code, sub_geo_level, cfg, inputs, params, dirs["visibility"], overwrite) is None
-    ]
+    succeeded, failed = [], []
+    for code in tqdm(codes, desc="Regions"):
+        try:
+            res = process_geo_code_raster(geo_level, code, sub_geo_level, cfg, inputs, params, dirs["visibility"], overwrite)
+            (succeeded if res is not None else failed).append(code)
+        except Exception:
+            logger.exception(f"Visibility: error processing {code}")
+            failed.append(code)
     write_run_manifest(
-        dirs["visibility"], "Visibility", codes, [c for c in codes if c not in failed], failed,
+        dirs["visibility"], "Visibility", codes, succeeded, failed,
         cfg=cfg, duration_s=time.time() - start,
         extra={"geo_level": geo_level, "sub_geo_level": sub_geo_level, "buffer": buffer, "engine": "raster"},
+        merge_existing=(geo_code is not None),
     )
 
 
@@ -378,8 +417,12 @@ def _run_trees(cfg, geo_level: str, geo_code: str | None, n_workers: int, overwr
     (`--geo_code context` segments only the ring)."""
     import geopandas as gpd
     import pandas as pd
-    from .optional.tree_segmentation import process_geo_code as process_trees, chm_source
 
+    from .optional.tree_segmentation import chm_source, process_geo_code as process_trees
+    from .pipeline import setup_output_dirs
+
+    if not cfg.data.trees_dir:
+        raise typer.BadParameter("Trees needs data.trees_dir (output directory for segmented trees)")
     census_parquet = setup_output_dirs(cfg)["database"] / "census_boundaries.parquet"
     if census_parquet.exists():
         boundaries = gpd.read_parquet(census_parquet)
@@ -387,7 +430,7 @@ def _run_trees(cfg, geo_level: str, geo_code: str | None, n_workers: int, overwr
         from .pipeline import _read_vector
         boundaries = _read_vector(cfg.data.census_boundaries).to_crs(cfg.crs)
     # "context" = the context_buffer ring around the study area, whose trees count for edge buildings
-    codes = [geo_code] if geo_code else list(boundaries[geo_level].dropna().unique()) + ["context"]
+    codes = [geo_code] if geo_code is not None else list(boundaries[geo_level].dropna().unique()) + ["context"]
     if "context" in codes and cfg.context_buffer > 0:
         from .pipeline import context_ring
         ring = context_ring(boundaries.to_crs(cfg.crs), cfg.context_buffer)
@@ -398,13 +441,18 @@ def _run_trees(cfg, geo_level: str, geo_code: str | None, n_workers: int, overwr
     logger.info(f"Trees: segmenting {len(codes)} regions from {chm_source(cfg)} with {n_workers} workers")
     start = time.time()
     codes = list(codes)
-    failed = [
-        code for code in tqdm(codes, desc="Regions")
-        if process_trees(geo_level, code, cfg, boundaries, n_workers=n_workers, overwrite=overwrite) is None
-    ]
+    succeeded, failed = [], []
+    for code in tqdm(codes, desc="Regions"):
+        try:
+            res = process_trees(geo_level, code, cfg, boundaries, n_workers=n_workers, overwrite=overwrite)
+            (succeeded if res is not None else failed).append(code)
+        except Exception:
+            logger.exception(f"Trees: error processing {code}")
+            failed.append(code)
     write_run_manifest(
-        Path(cfg.data.trees_dir), "Trees", codes, [c for c in codes if c not in failed], failed,
+        Path(cfg.data.trees_dir), "Trees", codes, succeeded, failed,
         cfg=cfg, duration_s=time.time() - start, extra={"geo_level": geo_level},
+        merge_existing=(geo_code is not None),
     )
 
 
@@ -472,7 +520,8 @@ def validate(
     geo_level column that isn't in the census file, a geographic CRS, missing
     Java) before a long Spark run starts. Exits non-zero if anything is wrong.
     """
-    from .config.schema import building_source, is_osm, is_overture
+    from .config.schema import building_source, is_open_buildings, is_osm, is_overture
+    from .terrain import DEM_SOURCES
 
     cfg = _load_config_or_exit(config)
     errors: list[str] = []
@@ -494,9 +543,18 @@ def validate(
         if not Path(value).exists():
             errors.append(f"{name}: file not found: {value}")
 
-    for name, value in [("data.trees_dir", cfg.data.trees_dir), ("data.chm_tiles_dir", cfg.data.chm_tiles_dir)]:
-        if value and not Path(value).is_dir():
-            warnings.append(f"{name}: directory not found (needed by the processes that use it): {value}")
+    if cfg.data.trees_dir and not Path(cfg.data.trees_dir).exists():
+        warnings.append(f"data.trees_dir: path not found (needed by the processes that use it): {cfg.data.trees_dir}")
+    if cfg.data.chm_tiles_dir and not Path(cfg.data.chm_tiles_dir).is_dir():
+        warnings.append(f"data.chm_tiles_dir: directory not found (needed by the processes that use it): {cfg.data.chm_tiles_dir}")
+
+    # Local height files and local terrain rasters
+    for spec in cfg.heights.sources:
+        if spec.source == "file" and not Path(spec.options["path"]).exists():
+            warnings.append(f"heights.sources[{spec.label}]: path not found: {spec.options['path']}")
+    if cfg.terrain.source and cfg.terrain.source.strip().lower() not in DEM_SOURCES:
+        if not Path(cfg.terrain.source).exists():
+            warnings.append(f"terrain.source: local raster/directory not found: {cfg.terrain.source}")
 
     # Census columns: every geo_level (and any geo_level_names value) must be present
     if Path(cfg.data.census_boundaries).exists():
@@ -514,22 +572,33 @@ def validate(
     # Buildings id column, when buildings come from a file
     if building_source(cfg.data.buildings) is None and Path(cfg.data.buildings).exists():
         cols = _vector_columns(cfg.data.buildings, cfg.columns.building_layer)
-        if cols is not None and cfg.columns.building_id and cfg.columns.building_id not in cols:
+        if cols is None:
+            warnings.append(
+                f"Could not read columns of data.buildings: {cfg.data.buildings}"
+                + (f" (layer={cfg.columns.building_layer!r})" if cfg.columns.building_layer else "")
+            )
+        elif cfg.columns.building_id and cfg.columns.building_id not in cols:
             errors.append(f"columns.building_id: '{cfg.columns.building_id}' is not a column of the buildings file")
 
     # Java is needed for every Spark-based process
+    import os
     import shutil
-    from .utils.constants import JAVA_HOME
-    if not (JAVA_HOME or shutil.which("java")):
-        warnings.append("No Java found (JAVA_HOME unset and `java` not on PATH) — Spark processes will fail. Install JDK 17.")
+    from .utils.constants import get_java_home
+
+    java_home = get_java_home()
+    has_java = bool((java_home and (Path(java_home) / "bin" / "java").exists()) or shutil.which("java"))
+    if not has_java:
+        warnings.append("No Java found (JAVA_HOME unset/invalid and `java` not on PATH) — Spark processes will fail. Install JDK 17.")
 
     # GEE-backed sources need authentication + a project
+    gee_height_sources = {s.source for s in cfg.heights.sources} & {"gba", "utglobus", "open_buildings_temporal", "ghs_built_h"}
     gee_sources = [n for n, v in [
-        ("data.buildings: open_buildings", cfg.data.buildings == "open_buildings"),
+        ("data.buildings: open_buildings", is_open_buildings(cfg.data.buildings)),
         ("data.canopy_height_ee_path", bool(cfg.data.canopy_height_ee_path)),
         ("gee_boundaries_asset (Spectral)", bool(cfg.gee_boundaries_asset)),
+        (f"heights.sources ({sorted(gee_height_sources)})", bool(gee_height_sources)),
     ] if v]
-    if gee_sources and not (cfg.gee_project or __import__("os").getenv("GEE_PROJECT_NAME")):
+    if gee_sources and not (cfg.gee_project or os.getenv("GEE_PROJECT_NAME")):
         warnings.append(f"GEE sources configured ({gee_sources}) but no gee_project set — run `earthengine authenticate` and set gee_project")
 
     typer.echo(f"\nResolved config for '{cfg.study_area_name}':")

@@ -91,12 +91,17 @@ def test_rendered_objects_have_docstrings(page, target):
         assert ast.get_docstring(node), f"{page}: ::: {target} has no docstring"
         return
 
-    # A whole module: the module itself and every public object it renders.
+    # A whole module: the module itself, every public top-level object, and every
+    # public method/property on rendered classes.
     assert ast.get_docstring(tree), f"{page}: ::: {target} — {path} has no module docstring"
-    missing = [
-        n.name for n in tree.body
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-        and not n.name.startswith("_")
-        and not ast.get_docstring(n)
-    ]
+    missing = []
+    for n in tree.body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and not n.name.startswith("_"):
+            if not ast.get_docstring(n):
+                missing.append(n.name)
+            if isinstance(n, ast.ClassDef):
+                for m in n.body:
+                    if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)) and not m.name.startswith("_"):
+                        if not ast.get_docstring(m):
+                            missing.append(f"{n.name}.{m.name}")
     assert missing == [], f"{page}: ::: {target} renders undocumented objects {missing}"

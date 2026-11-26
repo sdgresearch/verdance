@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import rasterio
+import rasterio.errors
 import shapely
 from rasterio.features import shapes
 from rasterio.windows import Window, from_bounds
@@ -181,10 +182,12 @@ def detect_treetops(
     zf = np.where(np.isfinite(zs), zs, -np.inf).astype(np.float32, copy=False)
 
     # Every treetop is also a maximum over the part of the 3x3 neighbourhood its smallest window covers
-    rmin = p.ws_min / 2 if p.ws_min <= cap else cap / 2
+    rmin = max(0.0, p.ws_min / 2 if p.ws_min <= cap else cap / 2)
     fi, fj = _disc_offsets(min(rmin, math.hypot(gx, gy)), gx, gy)
+    in_3x3 = (np.abs(fi) <= 1) & (np.abs(fj) <= 1)
     footprint = np.zeros((3, 3), bool)
-    footprint[fi + 1, fj + 1] = True
+    footprint[fi[in_3x3] + 1, fj[in_3x3] + 1] = True
+    footprint[1, 1] = True
     local_max = ndimage.maximum_filter(zf, footprint=footprint, mode="constant", cval=-np.inf)
     cand = np.flatnonzero((zf >= p.hmin) & (zf >= local_max))
     if cand.size == 0:
@@ -336,7 +339,7 @@ def segment_array(
         cap = ws_cap if ws_cap is not None else window_cap(raw, p)
         rows, cols = detect_treetops(raw, gx, gy, p, cap)
         detect_surface = raw
-    labels = dalponte2016(zs, rows, cols, gx, gy, p)
+    labels = dalponte2016(detect_surface, rows, cols, gx, gy, p)
     return Segmentation(labels, rows, cols, detect_surface[rows, cols].astype(float))
 
 
@@ -501,9 +504,15 @@ def segment_raster(
         window = full
         if bounds is not None:
             window = from_bounds(*bounds, transform=src.transform).round_offsets().round_lengths()
-            window = window.intersection(full)
-        blocks = _block_windows(window, block_size)
-        if region is not None:
+            try:
+                window = window.intersection(full)
+            except rasterio.errors.WindowError:
+                blocks = []
+            else:
+                blocks = _block_windows(window, block_size)
+        else:
+            blocks = _block_windows(window, block_size)
+        if region is not None and blocks:
             boxes = shapely.box(*np.array([rasterio.windows.bounds(b, src.transform) for b in blocks]).T)
             blocks = [b for b, hit in zip(blocks, shapely.intersects(boxes, region)) if hit]
         if ws_cap is None and p.ws_max is None and len(blocks) > 1:
@@ -601,7 +610,9 @@ def process_geo_code(
         trees["treeID"] = np.arange(1, len(trees) + 1)
 
         out_dir.mkdir(parents=True, exist_ok=True)
-        trees.to_parquet(out_path, index=False)
+        from ..pipeline import _write_parquet_atomic
+
+        _write_parquet_atomic(trees, out_path)
         logger.info(f"Trees: {geo_code} — {len(trees)} trees -> {out_path}")
         return out_path
     except Exception:

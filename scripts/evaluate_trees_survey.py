@@ -2,8 +2,8 @@
 
 Only detections T3 would count are scored (crown area > 10 m2, height > 3 m).
 Survey trees are matched one-to-one to treetops within --radius metres.
-Recall is reported on all surveyed trees and, when --chm is given, on those
-visible in the CHM (canopy >= 3 m within 3 m). Inventories usually omit
+Recall is reported on all surveyed trees and, when a CHM path is appended via
+`:chm1,chm2...` in `--run`, on those visible in the CHM (canopy >= 3 m within 3 m). Inventories usually omit
 private trees, so precision is local: detections within --radius of a visible
 surveyed tree that are not its match are split crowns.
 

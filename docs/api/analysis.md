@@ -1,8 +1,8 @@
 # Analysis modules
 
 The per-geo-code processes that compute each part of the 3-30-300 rule, and the `Merge`
-step that consolidates them. Each module exposes a `process_geo_code` entry point, which
-[`verdance.run`](index.md#verdance.api.run) dispatches to.
+step that consolidates them. Each per-geo module exposes a `process_geo_code` entry
+point, which [`verdance.run`](index.md#verdance.api.run) dispatches to.
 
 ## T3 — trees near each building
 

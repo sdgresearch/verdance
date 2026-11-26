@@ -17,7 +17,7 @@ class S2System(SedonaSQLDGGS):
         return f"ST_S2CellIDs({geom_expr}, {resolution})"
 
     def cell_id_str_sql(self, cell_expr: str) -> str:
-        return f"LOWER(HEX({cell_expr}))"
+        return f"LPAD(LOWER(HEX({cell_expr})), 16, '0')"
 
     def cell_geom_sql(self, cell_expr: str) -> str:
         return f"ST_S2ToGeom(array({cell_expr}))[0]"

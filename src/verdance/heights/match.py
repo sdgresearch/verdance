@@ -106,50 +106,92 @@ def zonal_heights(
     with rasterio.open(src_path) as src:
         fps = footprints.to_crs(src.crs) if footprints.crs is not None and src.crs is not None else footprints
         transform, nodata = src.transform, src.nodata
-        res = abs(transform.a)
+        if transform.b != 0 or transform.d != 0 or transform.a <= 0 or transform.e >= 0:
+            raise ValueError(
+                f"Height raster {src_path} must be north-up and unrotated (got transform {transform})"
+            )
+        res_x, res_y = float(transform.a), float(-transform.e)
         mid_lat = (src.bounds.bottom + src.bounds.top) / 2  # ignored for projected CRSs
-        res_m = res * _metres_per_unit(src.crs, latitude=mid_lat)
+        res_m = math.sqrt(res_x * res_y) * _metres_per_unit(src.crs, latitude=mid_lat)
         geoms = fps.geometry.values
-        b = shapely.bounds(geoms)
-        # group footprints by the block their bounds' centre falls in
-        cx = (b[:, 0] + b[:, 2]) / 2
-        cy = (b[:, 1] + b[:, 3]) / 2
-        col = np.floor((cx - transform.c) / res / block).astype(np.int64)
-        row = np.floor((transform.f - cy) / res / block).astype(np.int64)
-        groups = pd.Series(np.arange(len(fps))).groupby([row, col]).indices
+        valid_geom = ~shapely.is_empty(geoms) & pd.notna(geoms)
 
         heights = np.full(len(fps), np.nan)
         quality = np.zeros(len(fps))
-        full = rasterio.windows.Window(0, 0, src.width, src.height)
-        for idx in groups.values():
-            gb = b[idx]
-            c0 = math.floor((gb[:, 0].min() - transform.c) / res) - 1
-            c1 = math.ceil((gb[:, 2].max() - transform.c) / res) + 1
-            r0 = math.floor((transform.f - gb[:, 3].max()) / res) - 1
-            r1 = math.ceil((transform.f - gb[:, 1].min()) / res) + 1
-            win = rasterio.windows.Window(c0, r0, c1 - c0, r1 - r0)
-            try:
-                win = win.intersection(full)
-            except rasterio.errors.WindowError:
-                continue  # footprints entirely outside the raster
-            values = src.read(1, window=win, masked=False).astype(np.float64)
-            if nodata is not None and not np.isnan(nodata):
-                values[values == nodata] = np.nan
-            wt = rasterio.windows.transform(win, transform)
-            shape = values.shape
-            h, q = _zonal_block(geoms[idx], values, wt, shape, stat, all_touched=False)
-            small = np.isnan(q)  # no pixel centre inside
-            if small.any():
-                h2, q2 = _zonal_block(geoms[idx][small], values, wt, shape, stat, all_touched=True)
-                h[small], q[small] = h2, q2
-            heights[idx] = h
-            quality[idx] = np.nan_to_num(q)
+        if valid_geom.any():
+            valid_idx = np.flatnonzero(valid_geom)
+            b = shapely.bounds(geoms[valid_idx])
+            # group footprints by the block their bounds' centre falls in
+            cx = (b[:, 0] + b[:, 2]) / 2
+            cy = (b[:, 1] + b[:, 3]) / 2
+            col = np.floor((cx - transform.c) / res_x / block).astype(np.int64)
+            row = np.floor((transform.f - cy) / res_y / block).astype(np.int64)
+            groups = pd.Series(np.arange(len(valid_idx))).groupby([row, col]).indices
+
+            full = rasterio.windows.Window(0, 0, src.width, src.height)
+            for local_idx in groups.values():
+                idx = valid_idx[local_idx]
+                gb = b[local_idx]
+                c0 = math.floor((gb[:, 0].min() - transform.c) / res_x) - 1
+                c1 = math.ceil((gb[:, 2].max() - transform.c) / res_x) + 1
+                r0 = math.floor((transform.f - gb[:, 3].max()) / res_y) - 1
+                r1 = math.ceil((transform.f - gb[:, 1].min()) / res_y) + 1
+                win = rasterio.windows.Window(c0, r0, c1 - c0, r1 - r0)
+                try:
+                    win = win.intersection(full)
+                except rasterio.errors.WindowError:
+                    continue  # footprints entirely outside the raster
+                values = src.read(1, window=win, masked=False).astype(np.float64)
+                if nodata is not None and not np.isnan(nodata):
+                    values[values == nodata] = np.nan
+                wt = rasterio.windows.transform(win, transform)
+                shape = values.shape
+                h, q = _zonal_block(geoms[idx], values, wt, shape, stat, all_touched=False)
+                small = np.isnan(q)  # no pixel centre inside
+                if small.any():
+                    # Evaluate sub-pixel footprints individually so adjacent houses sharing
+                    # a coarse pixel (e.g. 10 m GHS-BUILT-H) don't overwrite each other's label
+                    h2, q2 = _zonal_small(geoms[idx][small], values, wt, shape, stat)
+                    h[small], q[small] = h2, q2
+                heights[idx] = h
+                quality[idx] = np.nan_to_num(q)
 
     out["height"] = heights
     out["quality"] = quality
     out["res_m"] = res_m
     logger.debug(f"Zonal {stat} over {Path(src_path).name}: {np.isfinite(heights).sum()}/{len(heights)} footprints")
     return out
+
+
+def _zonal_small(geoms, values, transform, shape, stat) -> tuple[np.ndarray, np.ndarray]:
+    """Per-footprint all_touched statistic for sub-pixel footprints without label collisions."""
+    n = len(geoms)
+    h = np.full(n, np.nan)
+    q = np.full(n, np.nan)
+    nrows, ncols = shape
+    res_x, res_y = float(transform.a), float(-transform.e)
+    agg_fn = {"median": np.median, "mean": np.mean, "max": np.max}[stat]
+    bounds = shapely.bounds(geoms)
+    for k, (geom, (minx, miny, maxx, maxy)) in enumerate(zip(geoms, bounds)):
+        c0 = max(0, math.floor((minx - transform.c) / res_x))
+        c1 = min(ncols, math.ceil((maxx - transform.c) / res_x))
+        r0 = max(0, math.floor((transform.f - maxy) / res_y))
+        r1 = min(nrows, math.ceil((transform.f - miny) / res_y))
+        if c1 <= c0 or r1 <= r0:
+            continue
+        sub_vals = values[r0:r1, c0:c1]
+        sub_t = rasterio.windows.transform(rasterio.windows.Window(c0, r0, c1 - c0, r1 - r0), transform)
+        mask = rasterio.features.rasterize(
+            [(geom, 1)], out_shape=sub_vals.shape, transform=sub_t, fill=0, dtype="uint8", all_touched=True
+        ).astype(bool)
+        if not mask.any():
+            continue
+        picked = sub_vals[mask]
+        finite = picked[np.isfinite(picked)]
+        q[k] = len(finite) / len(picked)
+        if finite.size:
+            h[k] = float(agg_fn(finite))
+    return h, q
 
 
 def _zonal_block(geoms, values, transform, shape, stat, all_touched) -> tuple[np.ndarray, np.ndarray]:

@@ -7,6 +7,8 @@ from ...config.schema import VerdanceConfig
 
 @dataclass(frozen=True)
 class VisibilityParams:
+    """Parameters controlling candidate filtering, observer windows, targets and DSM ray casting."""
+
     # trees count within `buffer` metres of the footprint (as T3), with area and height above these
     buffer: float
     tree_area: float
@@ -30,10 +32,12 @@ class VisibilityParams:
 
     @property
     def skip(self) -> float:
+        """Distance in metres ignored at both ends of each sightline."""
         return self.resolution if self.end_skip is None else self.end_skip
 
     @classmethod
     def from_cfg(cls, cfg: VerdanceConfig, buffer: float, tree_area: float, tree_height: float) -> "VisibilityParams":
+        """Build a `VisibilityParams` instance from a `VerdanceConfig` and per-run thresholds."""
         v = cfg.visibility
         return cls(
             buffer=float(buffer), tree_area=float(tree_area), tree_height=float(tree_height),

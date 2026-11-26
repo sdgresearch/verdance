@@ -7,8 +7,8 @@ importable directly from the top-level package:
 import verdance
 
 cfg = verdance.load_config("mycity.yaml")
-verdance.run(cfg, "T3", buffer=50)      # writes T3 CSVs, returns {geo_code: DataFrame | None}
-merged = verdance.run(cfg, "Merge")     # consolidates and returns the merged unit table
+verdance.run(cfg, "T3", buffer=50)                   # writes T3 CSVs, returns {geo_code: DataFrame | None}
+merged = verdance.run(cfg, "Merge", t3_buffers=[50]) # consolidates and returns the merged unit table
 ```
 
 They are imported lazily, so `import verdance` — to read `verdance.__version__`, say —
@@ -17,9 +17,9 @@ does not pull in PySpark and the rest of the stack.
 `VerdanceConfig` is documented alongside the YAML keys it mirrors, in the
 [config reference](../configuration.md#reference).
 
-The per-geo-code analysis modules (T3, T30, T30_buildings, T300, Tree_count) and Merge
-are covered by `run()`. Trees, Heights, Spectral and the raster Visibility engine have
-bespoke setup and remain CLI-only for now.
+The per-geo-code analysis modules (`T3`, `T30`, `T30_buildings`, `T300`, `Tree_count`,
+vector `Visibility`) and `Merge` are covered by `run()`. `Trees`, `Heights`, `Spectral`
+and the raster `Visibility` engine have bespoke setup and remain CLI-only for now.
 
 ## Public API
 

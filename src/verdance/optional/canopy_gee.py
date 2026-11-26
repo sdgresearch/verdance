@@ -55,6 +55,9 @@ def download_binary_canopy(
         logger.debug(f"Using cached GEE canopy raster {cache_path}")
         return rxr.open_rasterio(cache_path, masked=True)
 
+    if scale <= 0:
+        raise ValueError(f"gee_scale must be positive, got {scale!r}")
+
     import ee  # GEE-only; imported here so the module loads without the earthengine stack
 
     ensure_gee(cfg.gee_project)
@@ -62,7 +65,7 @@ def download_binary_canopy(
 
     # Build the output pixel grid directly in the projected CRS (metres), so GEE
     # reprojects the dataset onto it. xee 0.1.x takes crs + crs_transform + shape.
-    minx, miny, maxx, maxy = geo_boundary_gdf.dissolve().total_bounds
+    minx, miny, maxx, maxy = geo_boundary_gdf.to_crs(cfg.crs).total_bounds
     width = max(1, math.ceil((maxx - minx) / scale))
     height = max(1, math.ceil((maxy - miny) / scale))
     transform = affine.Affine(scale, 0.0, minx, 0.0, -scale, maxy)
@@ -92,21 +95,22 @@ def download_binary_canopy(
         crs_transform=transform,
         shape_2d=(width, height),
     )
-
-    da = ds["canopy"]
-    if "time" in da.dims:
-        da = da.isel(time=0, drop=True)
-    # xee returns dims (X, Y); orient to (y, x) descending-y like a GeoTIFF
-    rename = {d: ("x" if d.lower() in ("x", "lon") else "y") for d in da.dims}
-    da = da.rename(rename).transpose("y", "x")
-    da = da.sortby("y", ascending=False).sortby("x")
-    da = da.rio.write_crs(cfg.crs).expand_dims("band")
+    try:
+        da = ds["canopy"]
+        if "time" in da.dims:
+            da = da.isel(time=0, drop=True)
+        # xee returns dims (X, Y); orient to (y, x) descending-y like a GeoTIFF
+        rename = {d: ("x" if d.lower() in ("x", "lon") else "y") for d in da.dims}
+        da = da.rename(rename).transpose("y", "x")
+        da = da.sortby("y", ascending=False).sortby("x")
+        # Materialise once so caching + returning never downloads twice from GEE
+        da = da.load()
+        da = da.rio.write_crs(cfg.crs).rio.write_nodata(float("nan")).expand_dims("band")
+    finally:
+        ds.close()
 
     if cache_path is not None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        # tag NaN as nodata so raster readers (rioxarray masked=True, Sedona
-        # RS_ZonalStats) can exclude unmapped pixels from pixel counts
-        da = da.rio.write_nodata(float("nan"))
         write_raster(da, cache_path)
 
     return da

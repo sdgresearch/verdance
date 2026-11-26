@@ -23,13 +23,18 @@ def create_spatial_rdds(query_sdf: DataFrame, object_sdf: DataFrame, build_on_sp
     query_rdd.analyze()
     object_rdd.analyze()
 
-    # KDB-tree partitioning requires partitions <= records/2; cap for small datasets
+    # KDB-tree partitioning requires partitions <= records/2 and a non-empty envelope
     default_parallelism = query_sdf.sparkSession.sparkContext.defaultParallelism
-    total = object_rdd.approximateTotalCount or 1
-    num_partitions = max(1, min(default_parallelism, total // 2))
-    object_rdd.spatialPartitioning(GridType.KDBTREE, num_partitions)
-    query_rdd.spatialPartitioning(object_rdd.getPartitioner())
-    query_rdd.buildIndex(IndexType.QUADTREE, build_on_spatial_partitioned_rdd)
+    total = object_rdd.approximateTotalCount or 0
+    if total >= 2 and query_rdd.approximateTotalCount:
+        num_partitions = max(1, min(default_parallelism, total // 2))
+        object_rdd.spatialPartitioning(GridType.KDBTREE, num_partitions)
+        query_rdd.spatialPartitioning(object_rdd.getPartitioner())
+        query_rdd.buildIndex(IndexType.QUADTREE, build_on_spatial_partitioned_rdd)
+    elif total == 1 and query_rdd.approximateTotalCount:
+        object_rdd.spatialPartitioning(GridType.QUADTREE, 1)
+        query_rdd.spatialPartitioning(object_rdd.getPartitioner())
+        query_rdd.buildIndex(IndexType.QUADTREE, build_on_spatial_partitioned_rdd)
 
     return query_rdd, object_rdd
 
@@ -49,10 +54,18 @@ def count_trees_rdd(
     """
     logger.debug("Counting trees for each area using RDD")
 
+    if not object_rdd.approximateTotalCount or not query_rdd.approximateTotalCount:
+        from pyspark.sql.types import LongType, StringType, StructField, StructType
+
+        return sedona.createDataFrame(
+            [],
+            StructType([StructField(query_column, StringType(), True), StructField("tree_count", LongType(), False)]),
+        )
+
     query_result = JoinQueryRaw.SpatialJoinQueryFlat(object_rdd, query_rdd, using_index, True)
     query_result_sdf = Adapter.toDf(query_result, [query_column], ["treeID"], sedona)
     if unique_objects:
-        query_result_sdf = query_result_sdf.dropDuplicates(["treeID"])
+        query_result_sdf = query_result_sdf.orderBy("treeID", query_column).dropDuplicates(["treeID"])
 
     geo_tree_count_df = (
         query_result_sdf

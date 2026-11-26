@@ -12,20 +12,21 @@ if TYPE_CHECKING:
 
 
 def download_imagery(
-    imagery_ic: "ee.Image", output_path: str, poll_s: int = 30, timeout_s: float = 7200,
+    imagery_ic: "ee.Image", output_path: str, region=None, poll_s: int = 30, timeout_s: float = 7200,
 ) -> None:
     """Export imagery to Google Drive, polling until it finishes or `timeout_s` elapses."""
     import ee
 
     logger.debug(f"Downloading imagery to Google Drive: {output_path}")
 
+    export_region = region if region is not None else imagery_ic.geometry()
     task = ee.batch.Export.image.toDrive(
         image=imagery_ic,
         description=f"Spectral_imagery_{int(time.time())}",
         folder="EarthEngine_Exports",
         fileNamePrefix=output_path,
         scale=10,
-        region=imagery_ic.geometry(),
+        region=export_region,
         fileFormat="GeoTIFF",
         maxPixels=1e13,
     )
@@ -33,17 +34,19 @@ def download_imagery(
 
     logger.info("Export task started. Waiting for completion...")
     deadline = time.time() + timeout_s
-    while task.status()["state"] in ["READY", "RUNNING"]:
+    status = task.status()
+    while status["state"] in ("READY", "RUNNING"):
         if time.time() > deadline:
             task.cancel()
-            raise TimeoutError(f"GEE export did not finish within {timeout_s:.0f}s (last state: {task.status()['state']})")
-        logger.info(f"Task status: {task.status()['state']}")
+            raise TimeoutError(f"GEE export did not finish within {timeout_s:.0f}s (last state: {status['state']})")
+        logger.info(f"Task status: {status['state']}")
         time.sleep(poll_s)
+        status = task.status()
 
-    if task.status()["state"] == "COMPLETED":
+    if status["state"] == "COMPLETED":
         logger.info("Download completed successfully!")
     else:
-        raise RuntimeError(f"Download failed: {task.status()}")
+        raise RuntimeError(f"Download failed: {status}")
 
 
 def process_gee(
@@ -85,5 +88,5 @@ def process_gee(
             raise ValueError("Provide one of: boundary_fc, boundary_asset, or adm0_name")
 
     imagery_ic = get_imagery(boundary_fc, imagery_ee_path, start_date, end_date, cloud_coverage, spectral_indexes)
-    spectral_index_path = f"spectral_{start_date}_{end_date}.tif"
-    download_imagery(imagery_ic, spectral_index_path)
+    spectral_index_path = f"spectral_{start_date}_{end_date}"
+    download_imagery(imagery_ic, spectral_index_path, region=boundary_fc.geometry().bounds())

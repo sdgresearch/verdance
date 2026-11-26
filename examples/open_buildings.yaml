@@ -2,11 +2,12 @@
 # Engine) and the other layers from OpenStreetMap. Requires gee_project (or
 # GEE_PROJECT_NAME in .env) and a prior `earthengine authenticate`.
 #
-# Coverage caveats — verdance warns about both at cache-build time:
+# Coverage caveats:
 #   - Open Buildings covers Africa, South and Southeast Asia, and Latin America
 #     & the Caribbean only. It has NO footprints in Europe or North America.
-#   - Footprints carry no height, so the optional Visibility module is not
-#     available with buildings: open_buildings.
+#   - Footprints carry no native height, so to run the optional Visibility
+#     module configure `heights.sources` (e.g. gba, open_buildings_temporal,
+#     ghs_built_h — see examples/generic.yaml).
 
 study_area_name: Nairobi
 

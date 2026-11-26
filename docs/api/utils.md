@@ -43,3 +43,7 @@ Serves the results as an interactive map — see [Visualising results](../visual
 ::: verdance.viz.tiles
     options:
       heading_level: 3
+
+::: verdance.viz.server
+    options:
+      heading_level: 3

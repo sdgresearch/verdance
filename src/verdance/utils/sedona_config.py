@@ -15,15 +15,36 @@ from loguru import logger
 from sedona.spark import SedonaContext
 from pyspark.sql.session import SparkSession
 
-from .constants import JAVA_HOME
+from .constants import get_java_home
+
+
+def _cgroup_memory_limit() -> int | None:
+    """Linux cgroup v2/v1 memory limit in bytes, or None when unlimited / non-Linux."""
+    for p in (Path("/sys/fs/cgroup/memory.max"), Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")):
+        try:
+            raw = p.read_text().strip()
+        except OSError:
+            continue
+        if raw and raw != "max":
+            try:
+                val = int(raw)
+                # cgroup v1 reports ~2^63 when unlimited; ignore anything >= 1 PB
+                if 0 < val < 1 << 50:
+                    return val
+            except ValueError:
+                continue
+    return None
 
 
 def _default_driver_memory() -> str:
-    """Three quarters of this machine's RAM, capped at 64 GB (Spark runs locally, so the driver does all the work)."""
+    """Three quarters of available RAM (respecting Linux cgroup limits), capped at 64 GB."""
     try:
         total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
     except (AttributeError, OSError, ValueError):
         return "8g"
+    limit = _cgroup_memory_limit()
+    if limit is not None:
+        total = min(total, limit)
     return f"{max(1, min(64, int(total * 0.75 / 2**30)))}g"
 
 
@@ -56,8 +77,9 @@ def get_spark() -> SparkSession:
     """
     logger.debug("Setting up Apache Sedona")
 
-    if JAVA_HOME:
-        os.environ["JAVA_HOME"] = JAVA_HOME
+    java_home = get_java_home()
+    if java_home:
+        os.environ["JAVA_HOME"] = java_home
     # Spark's Python workers default to the first `python3` on PATH, which outside an
     # activated environment (pipx, `uv tool`, a venv's bin/verdance) is a different interpreter
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)

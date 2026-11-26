@@ -78,8 +78,14 @@ def _ray_zreq(dsm, bldg, crown_id, x0, y0, res, ox, oy, tx, ty, tz, tid, skip0, 
         if ta <= tb and 0 <= j < nrows and 0 <= i < ncols:
             h = bldg[j, i] if _in_crown(crown_id, j, i, tid) else dsm[j, i]
             if h > 0.0 or not skip_ground:
-                za = (h - ta * tz) / (1.0 - ta)
-                zb = (h - tb * tz) / (1.0 - tb)
+                if ta >= 1.0:
+                    za = np.inf if h > tz else -np.inf
+                else:
+                    za = (h - ta * tz) / (1.0 - ta)
+                if tb >= 1.0:
+                    zb = np.inf if h > tz else za
+                else:
+                    zb = (h - tb * tz) / (1.0 - tb)
                 z = za if za > zb else zb
                 if z > zreq:
                     zreq = z
@@ -178,5 +184,7 @@ def ray_zreq_reference(dsm, bldg, crown_id, x0, y0, res, ox, oy, tx, ty, tz, tid
             ta, tb = max(min(ts), t_lo), min(max(ts), t_hi)
             if ta > tb:
                 continue
-            zreq = max(zreq, (h - ta * tz) / (1 - ta), (h - tb * tz) / (1 - tb))
+            za = (math.inf if h > tz else -math.inf) if ta >= 1.0 else (h - ta * tz) / (1.0 - ta)
+            zb = (math.inf if h > tz else za) if tb >= 1.0 else (h - tb * tz) / (1.0 - tb)
+            zreq = max(zreq, za, zb)
     return zreq

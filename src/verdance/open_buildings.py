@@ -36,15 +36,26 @@ def fetch_open_buildings(
         "the Caribbean only — Europe and North America are NOT covered"
     )
 
+    from .heights.gee import _with_retry
+
     ensure_gee(gee_project)
     region = ee.Geometry(mapping(polygon_4326))
     fc = (
         ee.FeatureCollection(OPEN_BUILDINGS_ASSET)
         .filterBounds(region)
         .filter(ee.Filter.gte("confidence", confidence_threshold))
+        .select(["full_plus_code", "confidence"])
     )
     logger.info(f"Fetching Open Buildings polygons (confidence >= {confidence_threshold})")
-    gdf = ee.data.computeFeatures({"expression": fc, "fileFormat": "GEOPANDAS_GEODATAFRAME"})
+    gdf = _with_retry(
+        lambda: ee.data.computeFeatures({"expression": fc, "fileFormat": "GEOPANDAS_GEODATAFRAME"}),
+        what="open_buildings computeFeatures",
+    )
+    if not gdf.empty and gdf.crs is None:
+        gdf = gdf.set_crs("EPSG:4326")
+    # filterBounds matches by intersection with the region bounds server-side; trim to the polygon
+    if not gdf.empty:
+        gdf = gdf[gdf.geometry.intersects(polygon_4326)].copy()
     if gdf.empty:
         raise ValueError(
             "Google Open Buildings returned no footprints for the study area — the boundary is likely "
@@ -52,11 +63,6 @@ def fetch_open_buildings(
             f"NOT Europe or North America), or open_buildings.confidence_threshold ({confidence_threshold}) "
             "is too high"
         )
-    if gdf.crs is None:
-        gdf = gdf.set_crs("EPSG:4326")
-
-    # filterBounds matches by intersection with the region bounds server-side; trim to the polygon
-    gdf = gdf[gdf.geometry.intersects(polygon_4326)]
     if "full_plus_code" in gdf.columns:
         gdf["building_id"] = gdf["full_plus_code"]
     else:

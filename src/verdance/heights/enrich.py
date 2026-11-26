@@ -9,6 +9,8 @@ either builds a new one instead of reusing a stale file.
 
 import hashlib
 import json
+import os
+import threading
 from pathlib import Path
 
 import geopandas as gpd
@@ -51,11 +53,14 @@ def source_cache_path(cfg: VerdanceConfig, source) -> Path:
 def heights_cache_path(cfg: VerdanceConfig) -> Path:
     """Cache path for the combined height table, keyed by the whole source chain.
 
-    A different chain builds a new table rather than reusing a stale one.
+    Includes each source's `cache_key()` (covering local file mtime/size,
+    source version and CRS) so updating a local file or bumping a source
+    builds a new table rather than reusing a stale one.
     """
     h = cfg.heights
     payload = {
-        "sources": [[s.source, s.label, s.options] for s in h.sources],
+        "sources": [[s.source, s.label, s.options, get_source(s, cfg).cache_key()] for s in h.sources],
+        "crs": cfg.crs,
         "default_height": h.default_height, "storey_height": h.storey_height, "min_overlap": h.min_overlap,
         "min_height": h.min_height, "max_height": h.max_height, "buildings": buildings_fingerprint(cfg),
     }
@@ -82,7 +87,13 @@ def source_heights(cfg: VerdanceConfig, spec, buildings: gpd.GeoDataFrame, bound
     df = source.heights(buildings[["building_id", *_extra_cols(buildings), "geometry"]], ctx)
     df = df.assign(building_id=df["building_id"].astype(str))
     path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(path, index=False)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.part")
+    try:
+        df.to_parquet(tmp, index=False)
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
     return df
 
 
@@ -106,7 +117,7 @@ def coalesce(building_ids: pd.Series, results: list[tuple[str, pd.DataFrame]], c
     quality = np.zeros(n)
     res = np.full(n, np.nan)
     for label, df in results:
-        df = df.drop_duplicates("building_id").set_index("building_id").reindex(ids)
+        df = df.assign(building_id=df["building_id"].astype(str)).drop_duplicates("building_id").set_index("building_id").reindex(ids)
         v = df["height"].to_numpy(dtype=float)
         take = np.isnan(height) & np.isfinite(v) & (v >= h.min_height) & (v <= h.max_height)
         height[take] = v[take]
@@ -159,9 +170,13 @@ def build_building_heights(cfg: VerdanceConfig, overwrite: bool = False) -> Path
     }
     table = pa.Table.from_pandas(heights, preserve_index=False)
     table = table.replace_schema_metadata({**(table.schema.metadata or {}), b"verdance_heights": json.dumps(meta).encode()})
-    tmp = out.with_suffix(".parquet.tmp")
-    pq.write_table(table, tmp)
-    tmp.replace(out)
+    tmp = out.with_name(f".{out.name}.{os.getpid()}.{threading.get_ident()}.part")
+    try:
+        pq.write_table(table, tmp)
+        tmp.replace(out)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
 
     table_txt = coverage_table(heights).to_string()
     logger.info(f"Heights: {len(heights)} buildings -> {out.name}\n{table_txt}")

@@ -2,12 +2,12 @@
 
     import verdance
     cfg = verdance.load_config("city.yaml")
-    verdance.run(cfg, "T3", buffer=50)      # writes T3 CSVs, returns {geo_code: DataFrame | None}
-    merged = verdance.run(cfg, "Merge")     # consolidates and returns the merged unit table
+    verdance.run(cfg, "T3", buffer=50)                         # writes T3 CSVs, returns {geo_code: DataFrame | None}
+    merged = verdance.run(cfg, "Merge", t3_buffers=[50])       # consolidates and returns the merged unit table
 
-The per-geo-code analysis modules (T3, T30, T30_buildings, T300, Tree_count) and
-Merge are covered here. Trees, Heights, Spectral and the raster Visibility engine
-have bespoke setup and remain CLI-only for now.
+The per-geo-code analysis modules (T3, T30, T30_buildings, T300, Tree_count,
+and vector Visibility) and Merge are covered here. Trees, Heights, Spectral and
+the raster Visibility engine have bespoke setup and remain CLI-only for now.
 """
 
 import inspect
@@ -22,7 +22,7 @@ from . import t300 as _t300
 from . import tree_count as _tc
 from .config.loader import load_config
 from .config.schema import VerdanceConfig
-from .dggs import get_system
+from .dggs import RESOLUTION_RANGES, SYSTEM_NAMES, get_system
 from .optional import visibility as _vis
 from .pipeline import load_tables, unit_output_name
 from .utils.manifest import write_run_manifest
@@ -81,8 +81,9 @@ def run(
     """Run one verdance process programmatically and return its result.
 
     `config` is a path or a loaded `VerdanceConfig`. `process` is one of T3,
-    T30, T30_buildings, T300, Tree_count or Merge. A Spark session is created
-    (and reused via `getOrCreate`) unless one is passed as `sedona`.
+    T30, T30_buildings, T300, Tree_count, Visibility (vector engine) or Merge.
+    A Spark session is created (and reused via `getOrCreate`) unless one is
+    passed as `sedona`.
 
     Merge returns the merged unit `DataFrame`; the per-geo modules write their
     CSVs, record a run manifest, and return `{geo_code: DataFrame | None}` (None
@@ -97,8 +98,36 @@ def run(
 
     cfg = config if isinstance(config, VerdanceConfig) else load_config(config)
     geo_levels = cfg.columns.geo_levels
-    dggs = dggs if dggs is not None else cfg.dggs
-    dggs_resolution = dggs_resolution if dggs_resolution is not None else cfg.dggs_resolution
+
+    if query_method not in ("sql", "rdd"):
+        raise ValueError(f"query_method must be 'sql' or 'rdd', got {query_method!r}")
+    if rule_distance not in ("euclidean", "network"):
+        raise ValueError(f"rule_distance must be 'euclidean' or 'network', got {rule_distance!r}")
+    if rule_t3_metric not in ("proximity", "visibility"):
+        raise ValueError(f"rule_t3_metric must be 'proximity' or 'visibility', got {rule_t3_metric!r}")
+    if geo_level is not None and geo_level not in geo_levels:
+        raise ValueError(f"geo_level {geo_level!r} not in config.columns.geo_levels: {geo_levels}")
+
+    if dggs is None:
+        dggs = cfg.dggs
+        if dggs_resolution is None:
+            dggs_resolution = cfg.dggs_resolution
+    elif dggs_resolution is None and dggs == cfg.dggs:
+        dggs_resolution = cfg.dggs_resolution
+
+    if (dggs is None) != (dggs_resolution is None):
+        raise ValueError("dggs and dggs_resolution must be provided together (or via config)")
+    if dggs is not None:
+        if dggs not in SYSTEM_NAMES:
+            raise ValueError(f"dggs must be one of {SYSTEM_NAMES}, got {dggs!r}")
+        lo, hi = RESOLUTION_RANGES[dggs]
+        if isinstance(dggs_resolution, bool) or not (isinstance(dggs_resolution, int) and lo <= dggs_resolution <= hi):
+            raise ValueError(f"dggs_resolution for {dggs} must be between {lo} and {hi}, got {dggs_resolution!r}")
+        if sub_geo_level is not None:
+            raise ValueError("sub_geo_level cannot be combined with dggs (grid cells replace the sub-geography)")
+    elif sub_geo_level is not None and sub_geo_level not in geo_levels:
+        raise ValueError(f"sub_geo_level {sub_geo_level!r} not in config.columns.geo_levels: {geo_levels}")
+
     sedona = sedona or get_spark()
 
     if process == "Merge":
@@ -107,8 +136,9 @@ def run(
         t3b = list(t3_buffers)
         merge_output_csv(sedona, cfg, t3b, dggs=dggs, dggs_resolution=dggs_resolution)
         if dggs is not None:
-            merge_geo = geo_level or sub_geo_level or get_system(dggs).column_name(dggs_resolution)
-            merge_sub = sub_geo_level or get_system(dggs).column_name(dggs_resolution)
+            grid_col = get_system(dggs).column_name(dggs_resolution)
+            merge_geo = geo_level or grid_col
+            merge_sub = grid_col
         else:
             merge_geo = geo_level or (geo_levels[-2] if len(geo_levels) > 1 else geo_levels[0])
             merge_sub = sub_geo_level or geo_levels[-1]
@@ -134,6 +164,7 @@ def run(
 
     args_dict = {
         "sedona": sedona, "geo_level": gl, "sub_geo_level": sgl, "cfg": cfg, "output_dir": output_dir,
+        "overlay_path": tables.get("overlay_path"),
         "query_method": query_method, "buffer": buffer, "tree_area": tree_area, "tree_height": tree_height,
         "low_threshold": low_threshold, "high_threshold": high_threshold, "gee_scale": gee_scale,
         "overwrite": overwrite, "road_nodes_gdf": tables.get("road_nodes_gdf"),
@@ -143,7 +174,7 @@ def run(
         "parks_sites_gdf": tables.get("parks_sites_gdf"),
         "parks_access_gdf": tables.get("parks_access_gdf"),
     }
-    codes = list([geo_code] if geo_code else tables["census_boundaries_gdf"][gl].unique())
+    codes = list([geo_code] if geo_code is not None else tables["census_boundaries_gdf"][gl].dropna().unique())
     start = time.time()
     results, failed = {}, []
     for code in codes:
@@ -159,5 +190,6 @@ def run(
         output_dir, process, codes, [c for c in codes if c not in failed], failed,
         cfg=cfg, duration_s=time.time() - start,
         extra={"geo_level": gl, "sub_geo_level": sgl, "buffer": buffer},
+        merge_existing=(geo_code is not None),
     )
     return results

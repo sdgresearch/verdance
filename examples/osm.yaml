@@ -42,12 +42,12 @@ osm:
 
 columns:
   # No building_id / park / road columns needed — OSM layers use canonical names.
-  # Note: OSM buildings carry no height, so the optional Visibility module
-  # (which needs columns.building_height_col) is not available with buildings: osm.
-  # Alternatives for buildings only: "overture" (Overture Maps; heights included
-  # but sparse outside major cities) or "open_buildings" (Google Open Buildings
-  # v3 via GEE; no heights, no Europe/North America coverage — see
-  # examples/open_buildings.yaml).
+  # OSM buildings parse height and building:levels tags where mapped; for full
+  # height coverage in Visibility, configure `heights.sources` (e.g. native,
+  # gba, open_buildings_temporal, ghs_built_h — see examples/generic.yaml).
+  # Alternatives for buildings: "overture" (Overture Maps; global footprints) or
+  # "open_buildings" (Google Open Buildings v3 via GEE; Africa, South/SE Asia,
+  # Latin America & Caribbean only — see examples/open_buildings.yaml).
 
   # Geography hierarchy columns in the census file, ordered coarsest → finest
   geo_levels:

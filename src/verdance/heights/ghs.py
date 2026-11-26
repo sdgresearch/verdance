@@ -20,10 +20,13 @@ BAND = "built_height"
 
 
 class GHSBuiltHeights(RasterHeightSource):
+    """JRC GHS-BUILT-H global 100 m building height raster fetched from GEE."""
+
     license = "CC BY 4.0 (European Commission, JRC)"
     stat = "mean"
 
     def rasters(self, buildings: gpd.GeoDataFrame, ctx: HeightContext) -> list[Path]:
+        """Download and cache GHS-BUILT-H tiles covering `buildings`."""
         import ee
 
         res = float(self.options.get("resolution", 10.0))

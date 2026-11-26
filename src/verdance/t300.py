@@ -16,7 +16,7 @@ from pyspark.sql.session import SparkSession
 
 from .config.schema import VerdanceConfig
 from .pipeline import _filter_parks, _filter_park_access
-from .utils.data_processing import filter_buffer_geometries, get_geometries, drop_geo_views, sql_str
+from .utils.data_processing import filter_buffer_geometries, get_geometries, drop_geo_views, sql_str, write_csv_atomic
 
 
 def filter_features(
@@ -50,8 +50,10 @@ def filter_features(
     buffered = geo_boundary_gdf.copy()
     buffered["geometry"] = geo_boundary_gdf.geometry.buffer(search_buffer)
 
-    _edges = road_edges_gdf.drop(columns=[c for c in road_edges_gdf.columns if c in ("index_right", "index_left")], errors="ignore")
-    _buffered = buffered.drop(columns=[c for c in buffered.columns if c in ("index_right", "index_left")], errors="ignore")
+    drop_edge_cols = [c for c in ("index_right", "index_left") if c in road_edges_gdf.columns]
+    _edges = road_edges_gdf.drop(columns=drop_edge_cols) if drop_edge_cols else road_edges_gdf
+    drop_buf_cols = [c for c in ("index_right", "index_left") if c in buffered.columns]
+    _buffered = buffered.drop(columns=drop_buf_cols) if drop_buf_cols else buffered
     geo_road_edges_gdf = gpd.sjoin(_edges, _buffered).rename(columns={"road_edge_start": "u", "road_edge_end": "v"})
     geo_road_edges_gdf["key"] = geo_road_edges_gdf.groupby(["u", "v"]).cumcount()
     geo_road_edges_gdf = geo_road_edges_gdf.set_index(["u", "v", "key"])
@@ -111,9 +113,9 @@ def get_road_graph_distances(
 
     def _snap(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         gdf = gdf.copy()
-        if gdf.empty:
-            gdf["nearest_road_node"] = pd.Series(dtype=object)
-            gdf["nearest_road_node_distance"] = pd.Series(dtype=float)
+        if gdf.empty or geo_graph.number_of_nodes() == 0:
+            gdf["nearest_road_node"] = pd.Series([None] * len(gdf), index=gdf.index, dtype=object)
+            gdf["nearest_road_node_distance"] = pd.Series([float("nan")] * len(gdf), index=gdf.index, dtype=float)
             return gdf
         centroids = gdf.geometry.centroid
         ids, dists = ox.distance.nearest_nodes(geo_graph, centroids.x, centroids.y, return_dist=True)
@@ -142,8 +144,9 @@ def get_closest_park_manhattan(
     logger.debug(f"Computing park distances for {len(geo_buildings_gdf)} buildings, {len(geo_park_access_gdf)} access points")
 
     # per road node: the closest access point snapped to it
+    valid_access = geo_park_access_gdf[geo_park_access_gdf["nearest_road_node"].notna()]
     best_access = (
-        geo_park_access_gdf.sort_values("nearest_road_node_distance")
+        valid_access.sort_values("nearest_road_node_distance")
         .drop_duplicates("nearest_road_node")
         .set_index("nearest_road_node")
     )
@@ -158,6 +161,13 @@ def get_closest_park_manhattan(
     dist, paths = (
         nx.single_source_dijkstra(graph, source, weight="w") if len(best_access) else ({}, {})
     )
+
+    if geo_buildings_gdf.empty:
+        return pd.DataFrame({
+            "building_id": pd.Series(dtype=geo_buildings_gdf["building_id"].dtype),
+            "closest_park_access_id": pd.Series(dtype=object),
+            "distance_manhattan": pd.Series(dtype=float),
+        })
 
     distances = []
     for building in geo_buildings_gdf.itertuples():
@@ -177,13 +187,17 @@ def get_closest_park_euclidean(
     geo_park_sites_gdf: gpd.GeoDataFrame,
 ) -> pd.DataFrame:
     """Euclidean (straight-line) distance from each building to nearest park site polygon."""
-    if geo_park_sites_gdf.empty:
+    if geo_park_sites_gdf.empty or geo_buildings_gdf.empty:
         return pd.DataFrame({
             "building_id": geo_buildings_gdf["building_id"],
             "closest_park_site_id": None,
             "distance_euclidean": float("nan"),
         })
-    result = gpd.sjoin_nearest(geo_buildings_gdf, geo_park_sites_gdf, distance_col="distance_euclidean")
+    result = gpd.sjoin_nearest(
+        geo_buildings_gdf[["building_id", "geometry"]],
+        geo_park_sites_gdf[["park_id", "geometry"]],
+        distance_col="distance_euclidean",
+    )
     result["distance_euclidean"] = result["distance_euclidean"].round(1)
     # sjoin_nearest returns one row per tied nearest park — keep one per building
     result = result.drop_duplicates(subset="building_id")
@@ -262,7 +276,7 @@ def process_geo_code(
         geo_park_distance_df = geo_park_distance_df.assign(building_id=geo_park_distance_df["building_id"].astype(str))
         geo_park_distance_df = geo_park_distance_df.merge(buildings_with_level, on="building_id", how="left")
 
-        geo_park_distance_df.to_csv(out_path, index=False)
+        write_csv_atomic(geo_park_distance_df, out_path)
 
         end_time = time.time()
         logger.info(f"T300: {geo_code} — {len(geo_park_distance_df)} records in {end_time - start_time:.2f}s")

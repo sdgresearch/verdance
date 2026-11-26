@@ -30,8 +30,8 @@ results.
 pip install verdance
 ```
 
-verdance runs on Python 3.12+ and needs a Java 11–17 runtime for Spark. See
-[Installation](installation.md) for the Java setup, the optional extras and the Docker
+verdance runs on Python 3.12 or 3.13 and needs a Java 11–17 runtime for Spark. See
+[Installation](installation.md) for the Java setup, Google Earth Engine and the Docker
 image.
 
 ## A city in one config file

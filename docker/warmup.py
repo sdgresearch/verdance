@@ -1,7 +1,7 @@
 """Build-time Sedona/Spark JAR warm-up.
 
 Starting a Sedona session forces Ivy to resolve and download every jar listed
-in `spark.jars.packages` (Sedona, GeoTools, PostGIS, PostgreSQL) into the Ivy
+in `spark.jars.packages` (Sedona and GeoTools) into the Ivy
 cache. Running this during `docker build` bakes those jars into the image so
 the container starts fast and works with no network at runtime.
 

@@ -36,6 +36,16 @@ def facade_points(
     """
     n_b = len(geoms)
     parts, part_b = shapely.get_parts(geoms, return_index=True)
+    # Unpack nested collections (e.g. GeometryCollection from make_valid containing MultiPolygon)
+    while len(parts) and (shapely.get_type_id(parts) >= 4).any():
+        parts, sub = shapely.get_parts(parts, return_index=True)
+        part_b = part_b[sub]
+    poly_mask = shapely.get_type_id(parts) == 3
+    parts, part_b = parts[poly_mask], part_b[poly_mask]
+    if len(parts) == 0:
+        empty_i = np.empty(0, dtype=np.int64)
+        empty_f = np.empty(0, dtype=np.float64)
+        return FacadePoints(empty_i, empty_f, empty_f, empty_f, empty_f, np.zeros(n_b, dtype=np.int64), np.zeros(n_b, dtype=np.int64))
     parts = shapely.orient_polygons(parts, exterior_cw=False)  # CCW: the outside is on the right
     coords, ring = shapely.get_coordinates(shapely.get_exterior_ring(parts), return_index=True)
 
@@ -68,7 +78,11 @@ def facade_points(
     pb = part_b[pt_ring]
 
     if blockers is not None and len(px):
-        hit, _ = blockers.query(shapely.points(px, py), predicate="intersects")
+        hit, b_hit = blockers.query(shapely.points(px, py), predicate="intersects")
+        if offset == 0.0 and len(hit):
+            # At offset 0 every facade point lies on its own building's ring; exclude self-hits
+            not_self = ~shapely.equals(blockers.geometries[b_hit], geoms[pb[hit]])
+            hit = hit[not_self]
         ok = np.ones(len(px), dtype=bool)
         ok[hit] = False
         px, py, nx, ny, pb = px[ok], py[ok], nx[ok], ny[ok], pb[ok]

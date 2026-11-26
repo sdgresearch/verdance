@@ -72,20 +72,22 @@ def generate_vom_paths_df(sedona: SparkSession, chm_tiles_dir: Path, tile_name_p
     """Scan VOM raster directory and return a metadata DataFrame."""
     logger.debug("Generating VOM paths DataFrame")
 
-    vom_sdf = sedona.read.format("binaryFile").load(f"{str(chm_tiles_dir)}/*/*.tif")
-    vom_sdf.createOrReplaceTempView("vom")
-
-    extract_ref_udf = make_extract_grid_reference_udf(tile_name_pattern)
-    vom_raster_paths_sdf = sedona.sql("SELECT path FROM vom")
-    vom_raster_paths_sdf = vom_raster_paths_sdf.withColumn("file_type", extract_vom_type_udf(vom_sdf["path"]))
-    vom_raster_paths_sdf = vom_raster_paths_sdf.withColumn("TILE_NAME", extract_ref_udf(vom_sdf["path"]))
-    vom_raster_paths_sdf = vom_raster_paths_sdf.withColumn("year", extract_year_udf(vom_sdf["path"]))
-    vom_raster_paths_sdf = vom_raster_paths_sdf.filter(vom_raster_paths_sdf["file_type"] == "CHM")
-
-    vom_df = vom_raster_paths_sdf.toPandas()
-    vom_df["path"] = vom_df["path"].str.replace("file:", "", regex=False)
-    vom_df.sort_values(["TILE_NAME", "year"], ascending=[True, False], inplace=True)
-    vom_df.reset_index(drop=True, inplace=True)
+    rows = []
+    for p in sorted(Path(chm_tiles_dir).glob("*/*.tif")):
+        path_str = str(p)
+        file_type = extract_vom_type(path_str)
+        if file_type != "CHM":
+            continue
+        rows.append({
+            "path": path_str,
+            "file_type": file_type,
+            "TILE_NAME": extract_grid_reference(path_str, pattern=tile_name_pattern),
+            "year": extract_year(path_str),
+        })
+    vom_df = pd.DataFrame(rows, columns=["path", "file_type", "TILE_NAME", "year"])
+    if not vom_df.empty:
+        vom_df.sort_values(["TILE_NAME", "year"], ascending=[True, False], inplace=True)
+        vom_df.reset_index(drop=True, inplace=True)
     return vom_df
 
 

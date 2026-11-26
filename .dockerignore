@@ -28,6 +28,13 @@ __pycache__/
 .claude/
 scripts/temp.py
 
+# Docs, tests, brand assets, and local environments (never copied into the image)
+docs/
+tests/
+assets/
+site/
+*-venv/
+
 # Local data and scratch files that are never copied into the image
 *.csv
 *.R
